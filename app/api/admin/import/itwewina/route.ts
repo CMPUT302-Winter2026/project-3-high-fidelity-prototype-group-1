@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
             stage: "finalizing",
             completed: 0,
             total: 0,
-            status: "Imported entries saved. Running AI categorization and relation mapping.",
+            status: "Imported entries saved. Running AI categorization, relation mapping, and explanation writing.",
             unitLabel: "AI batches"
           });
 

@@ -44,6 +44,8 @@ type ItwewinaImportResultEvent = {
     processedWords: number;
     addedCategoryAssignments: number;
     addedRelations: number;
+    addedBeginnerExplanations: number;
+    addedExpertExplanations: number;
     warning?: string;
   };
   warnings?: string[];
@@ -64,6 +66,8 @@ type AiImportSummary = {
   processedWords: number;
   addedCategoryAssignments: number;
   addedRelations: number;
+  addedBeginnerExplanations: number;
+  addedExpertExplanations: number;
   warning?: string;
 };
 
@@ -94,7 +98,9 @@ function buildImportMessage({
     ai.processedWords === 1 ? "" : "s"
   }, adding ${ai.addedCategoryAssignments} category assignment${
     ai.addedCategoryAssignments === 1 ? "" : "s"
-  } and ${ai.addedRelations} relation${ai.addedRelations === 1 ? "" : "s"}.`;
+  }, ${ai.addedRelations} relation${ai.addedRelations === 1 ? "" : "s"}, ${ai.addedBeginnerExplanations} beginner explanation${
+    ai.addedBeginnerExplanations === 1 ? "" : "s"
+  }, and ${ai.addedExpertExplanations} expert explanation${ai.addedExpertExplanations === 1 ? "" : "s"}.`;
 
   return warnings.length > 0 ? `${baseMessage} ${aiMessage} Completed with ${warnings.length} warning(s).` : `${baseMessage} ${aiMessage}`;
 }

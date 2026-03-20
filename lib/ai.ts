@@ -21,6 +21,8 @@ const ENRICHMENT_BATCH_SIZE = 10;
 const catalogWordSuggestionSchema = z.object({
   wordId: z.string().trim().min(1),
   categorySlugs: z.array(z.string().trim().min(1)).max(3).default([]),
+  beginnerExplanation: z.string().trim().max(320).optional().or(z.literal("")).default(""),
+  expertExplanation: z.string().trim().max(600).optional().or(z.literal("")).default(""),
   relations: z
     .array(
       z.object({
@@ -99,6 +101,8 @@ export type CatalogEnrichmentResult = {
   processedWords: number;
   addedCategoryAssignments: number;
   addedRelations: number;
+  addedBeginnerExplanations: number;
+  addedExpertExplanations: number;
   warning?: string;
 };
 
@@ -151,6 +155,11 @@ function chunkItems<T>(items: T[], size: number) {
   }
 
   return chunks;
+}
+
+function normalizeGeneratedExplanation(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function buildRelationEquivalenceKey(fromWordId: string, toWordId: string, relationType: (typeof AI_RELATION_TYPE_VALUES)[number]) {
@@ -221,6 +230,7 @@ export async function enrichVocabularyCatalogWithAI(options: {
         plainEnglish: true,
         partOfSpeech: true,
         linguisticClass: true,
+        rootStem: true,
         beginnerExplanation: true,
         expertExplanation: true,
         meanings: {
@@ -259,6 +269,8 @@ export async function enrichVocabularyCatalogWithAI(options: {
       processedWords: words.length,
       addedCategoryAssignments: 0,
       addedRelations: 0,
+      addedBeginnerExplanations: 0,
+      addedExpertExplanations: 0,
       warning: "AI enrichment skipped because OPENAI_API_KEY is not set."
     };
   }
@@ -268,7 +280,9 @@ export async function enrichVocabularyCatalogWithAI(options: {
       skipped: false,
       processedWords: 0,
       addedCategoryAssignments: 0,
-      addedRelations: 0
+      addedRelations: 0,
+      addedBeginnerExplanations: 0,
+      addedExpertExplanations: 0
     };
   }
 
@@ -314,6 +328,10 @@ export async function enrichVocabularyCatalogWithAI(options: {
         "Use only these relation types: synonym, antonym, broader, narrower, associated, variant, similar.",
         "When you choose broader, the target word must be a broader term than the source word.",
         "When you choose narrower, the target word must be a narrower term than the source word.",
+        'If needsBeginnerExplanation is true, write a learner-friendly beginnerExplanation in plain English using 1-2 short sentences.',
+        'If needsExpertExplanation is true, write an expertExplanation using the linguistic or semantic context available in 1-3 concise sentences.',
+        "If either explanation is not needed, return an empty string for that field.",
+        "Do not invent grammar details, morphology, or cultural claims that are not supported by the provided context.",
         "Do not invent new words, new categories, or low-confidence links.",
         "Theme membership is handled through categories, so do not use categoryMember relations."
       ].join("\n"),
@@ -328,6 +346,9 @@ export async function enrichVocabularyCatalogWithAI(options: {
             plainEnglish: word.plainEnglish,
             partOfSpeech: word.partOfSpeech,
             linguisticClass: word.linguisticClass,
+            rootStem: word.rootStem,
+            needsBeginnerExplanation: !word.beginnerExplanation?.trim(),
+            needsExpertExplanation: !word.expertExplanation?.trim(),
             beginnerExplanation: word.beginnerExplanation,
             expertExplanation: word.expertExplanation,
             meanings: word.meanings,
@@ -343,6 +364,8 @@ export async function enrichVocabularyCatalogWithAI(options: {
       ...(parsed.words ?? []).map((word) => ({
         wordId: word.wordId,
         categorySlugs: word.categorySlugs ?? [],
+        beginnerExplanation: word.beginnerExplanation ?? "",
+        expertExplanation: word.expertExplanation ?? "",
         relations: word.relations ?? []
       }))
     );
@@ -375,6 +398,13 @@ export async function enrichVocabularyCatalogWithAI(options: {
   );
 
   const categoryAssignments: Array<{ wordId: string; categoryId: string; sortOrder: number }> = [];
+  const explanationUpdates = new Map<
+    string,
+    {
+      beginnerExplanation?: string;
+      expertExplanation?: string;
+    }
+  >();
   const relationRows: Array<{
     fromWordId: string;
     toWordId: string;
@@ -416,6 +446,22 @@ export async function enrichVocabularyCatalogWithAI(options: {
       nextCategorySortOrderByWordId.set(sourceWord.id, nextSortOrder + 1);
     }
 
+    const generatedBeginnerExplanation = normalizeGeneratedExplanation(suggestion.beginnerExplanation);
+    const generatedExpertExplanation = normalizeGeneratedExplanation(suggestion.expertExplanation);
+    const nextExplanationUpdate = explanationUpdates.get(sourceWord.id) ?? {};
+
+    if (generatedBeginnerExplanation && !sourceWord.beginnerExplanation?.trim()) {
+      nextExplanationUpdate.beginnerExplanation = generatedBeginnerExplanation;
+    }
+
+    if (generatedExpertExplanation && !sourceWord.expertExplanation?.trim()) {
+      nextExplanationUpdate.expertExplanation = generatedExpertExplanation;
+    }
+
+    if (nextExplanationUpdate.beginnerExplanation || nextExplanationUpdate.expertExplanation) {
+      explanationUpdates.set(sourceWord.id, nextExplanationUpdate);
+    }
+
     for (const relation of uniqueBy(
       (suggestion.relations ?? []).filter((item) => item.targetWordId !== sourceWord.id),
       (item) => `${item.targetWordId}:${item.relationType}`
@@ -444,6 +490,8 @@ export async function enrichVocabularyCatalogWithAI(options: {
 
   let addedCategoryAssignments = 0;
   let addedRelations = 0;
+  let addedBeginnerExplanations = 0;
+  let addedExpertExplanations = 0;
 
   if (categoryAssignments.length > 0) {
     const result = await prisma.wordCategory.createMany({
@@ -461,11 +509,29 @@ export async function enrichVocabularyCatalogWithAI(options: {
     addedRelations = result.count;
   }
 
+  if (explanationUpdates.size > 0) {
+    const updates = Array.from(explanationUpdates.entries());
+
+    addedBeginnerExplanations = updates.filter(([, data]) => Boolean(data.beginnerExplanation)).length;
+    addedExpertExplanations = updates.filter(([, data]) => Boolean(data.expertExplanation)).length;
+
+    await prisma.$transaction(
+      updates.map(([wordId, data]) =>
+        prisma.word.update({
+          where: { id: wordId },
+          data
+        })
+      )
+    );
+  }
+
   return {
     skipped: false,
     processedWords: words.length,
     addedCategoryAssignments,
-    addedRelations
+    addedRelations,
+    addedBeginnerExplanations,
+    addedExpertExplanations
   };
 }
 
