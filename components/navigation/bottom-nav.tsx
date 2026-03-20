@@ -32,14 +32,16 @@ export function BottomNav() {
         <span
           aria-hidden
           className={cn(
-            "pointer-events-none absolute top-2 h-11 w-11 rounded-full bg-moss-700 shadow-card transition-[transform,opacity] duration-300 ease-out",
+            "pointer-events-none absolute left-2 top-2 flex h-11 items-center justify-center transition-[transform,opacity] duration-300 ease-out",
             activeIndex === -1 ? "opacity-0" : "opacity-100"
           )}
           style={{
-            left: "calc(0.5rem + ((100% - 1rem) / 4 - 2.75rem) / 2)",
-            transform: `translateX(calc(${Math.max(activeIndex, 0)} * ((100% - 1rem) / 4)))`
+            width: "calc((100% - 1rem) / 4)",
+            transform: `translateX(${Math.max(activeIndex, 0) * 100}%)`
           }}
-        />
+        >
+          <span className="h-11 w-11 rounded-full bg-moss-700 shadow-card" />
+        </span>
         {navItems.map((item, index) => {
           const Icon = item.icon;
           const active = index === activeIndex;
