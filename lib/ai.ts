@@ -21,14 +21,14 @@ const ENRICHMENT_BATCH_SIZE = 10;
 const catalogWordSuggestionSchema = z.object({
   wordId: z.string().trim().min(1),
   categorySlugs: z.array(z.string().trim().min(1)).max(3).default([]),
-  beginnerExplanation: z.string().trim().max(320).optional().or(z.literal("")).default(""),
-  expertExplanation: z.string().trim().max(600).optional().or(z.literal("")).default(""),
+  beginnerExplanation: z.string().trim().max(320).default(""),
+  expertExplanation: z.string().trim().max(600).default(""),
   relations: z
     .array(
       z.object({
         targetWordId: z.string().trim().min(1),
         relationType: z.enum(AI_RELATION_TYPE_VALUES),
-        rationale: z.string().trim().max(220).optional().or(z.literal(""))
+        rationale: z.string().trim().max(220).default("")
       })
     )
     .max(5)
@@ -366,7 +366,11 @@ export async function enrichVocabularyCatalogWithAI(options: {
         categorySlugs: word.categorySlugs ?? [],
         beginnerExplanation: word.beginnerExplanation ?? "",
         expertExplanation: word.expertExplanation ?? "",
-        relations: word.relations ?? []
+        relations: (word.relations ?? []).map((relation) => ({
+          targetWordId: relation.targetWordId,
+          relationType: relation.relationType,
+          rationale: relation.rationale ?? ""
+        }))
       }))
     );
   }
