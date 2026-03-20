@@ -43,7 +43,16 @@ function validateDatabaseUrl() {
   }
 }
 
-validateDatabaseUrl();
+function shouldValidateDatabaseUrl() {
+  return (
+    process.env.NEXT_PHASE !== "phase-production-build" &&
+    process.env.npm_lifecycle_event !== "build"
+  );
+}
+
+if (shouldValidateDatabaseUrl()) {
+  validateDatabaseUrl();
+}
 
 export const prisma =
   globalThis.prismaGlobal ??
