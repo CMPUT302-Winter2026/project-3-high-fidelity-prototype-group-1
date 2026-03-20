@@ -7,6 +7,8 @@ declare global {
   var prismaGlobal: PrismaClient | undefined;
 }
 
+let prismaClient: PrismaClient | undefined;
+
 function validateDatabaseUrl() {
   const databaseUrl = process.env.DATABASE_URL;
 
@@ -74,17 +76,22 @@ if (shouldValidateDatabaseUrl()) {
 }
 
 function getPrismaClient() {
-  if (globalThis.prismaGlobal) {
-    return globalThis.prismaGlobal;
+  if (prismaClient) {
+    return prismaClient;
   }
 
-  const client = createPrismaClient();
+  if (globalThis.prismaGlobal) {
+    prismaClient = globalThis.prismaGlobal;
+    return prismaClient;
+  }
+
+  prismaClient = createPrismaClient();
 
   if (process.env.NODE_ENV !== "production") {
-    globalThis.prismaGlobal = client;
+    globalThis.prismaGlobal = prismaClient;
   }
 
-  return client;
+  return prismaClient;
 }
 
 // Delay adapter creation so build-time imports do not require a live DATABASE_URL.
