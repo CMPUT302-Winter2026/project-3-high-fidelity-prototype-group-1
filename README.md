@@ -207,6 +207,9 @@ ADMIN_ACCESS_CODE=choose-a-secret-admin-code
 PORT=3000
 ```
 
+Replace `USER`, `PASSWORD`, `HOST`, and `DATABASE` with the real values from your Coolify PostgreSQL service.
+If your logs show `HOST:5432`, the placeholder connection string is still being used.
+
 7. Deploy the app.
 8. After the database is reachable, run Prisma migrations:
 
