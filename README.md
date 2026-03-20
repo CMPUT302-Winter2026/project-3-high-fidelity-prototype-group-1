@@ -35,6 +35,7 @@ Admin routes:
 Core MVP features:
 
 - mobile-first browsing and search
+- grounded AI answers for question-style search prompts
 - novice / expert word detail modes
 - local bookmarks via `localStorage`
 - AI-generated flashcards from saved words
@@ -171,6 +172,7 @@ OPENAI_MODEL=gpt-5-mini
 OPENAI_ENRICHMENT_MODEL=
 OPENAI_LESSON_PLAN_MODEL=
 OPENAI_FLASHCARD_MODEL=
+OPENAI_SEARCH_MODEL=
 ```
 
 ## Exact Useful Commands
@@ -219,6 +221,7 @@ NEXT_PUBLIC_APP_URL=https://your-app-domain.example
 ADMIN_ACCESS_CODE=choose-a-secret-admin-code
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-5-mini
+OPENAI_SEARCH_MODEL=
 PORT=3000
 ```
 
@@ -273,6 +276,7 @@ If `OPENAI_API_KEY` is not configured, imports still succeed and the admin UI sh
 
 - Theme pages now include a download action that generates an AI lesson plan and saves the PDF directly to the user's device.
 - The saved words page now includes an AI flashcard generator for the learner's bookmarked words.
+- The search page can answer question-style prompts by using OpenAI with local dictionary entries as grounding context.
 
 ## Seed Data Notes
 

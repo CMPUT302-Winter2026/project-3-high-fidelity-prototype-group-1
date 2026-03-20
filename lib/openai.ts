@@ -2,13 +2,14 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { z } from "zod";
 
-type OpenAITask = "catalogEnrichment" | "lessonPlan" | "flashcards";
+type OpenAITask = "catalogEnrichment" | "lessonPlan" | "flashcards" | "searchQuestion";
 type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 const DEFAULT_MODELS: Record<OpenAITask, string> = {
   catalogEnrichment: "gpt-5-mini",
   lessonPlan: "gpt-5-mini",
-  flashcards: "gpt-5-mini"
+  flashcards: "gpt-5-mini",
+  searchQuestion: "gpt-5-mini"
 };
 
 let client: OpenAI | undefined;
@@ -27,7 +28,9 @@ export function getOpenAIModel(task: OpenAITask) {
       ? process.env.OPENAI_ENRICHMENT_MODEL?.trim()
       : task === "lessonPlan"
         ? process.env.OPENAI_LESSON_PLAN_MODEL?.trim()
-        : process.env.OPENAI_FLASHCARD_MODEL?.trim();
+        : task === "flashcards"
+          ? process.env.OPENAI_FLASHCARD_MODEL?.trim()
+          : process.env.OPENAI_SEARCH_MODEL?.trim();
 
   return taskOverride || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODELS[task];
 }

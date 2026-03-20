@@ -3,6 +3,7 @@ import { z } from "zod";
 import { generateStructuredObject, isOpenAIConfigured } from "@/lib/openai";
 import { prisma } from "@/lib/prisma";
 import { uniqueBy } from "@/lib/utils";
+import type { ItwewinaMetadata } from "@/types";
 
 const AI_RELATION_TYPE_VALUES = [
   "synonym",
@@ -87,6 +88,12 @@ const flashcardDeckSchema = z.object({
     .min(1)
 });
 
+const searchQuestionAnswerSchema = z.object({
+  status: z.enum(["answered", "insufficient_context"]),
+  answer: z.string().trim().min(1).max(1400),
+  matchedWordIds: z.array(z.string().trim().min(1)).max(5).default([])
+});
+
 export type CatalogEnrichmentResult = {
   skipped: boolean;
   processedWords: number;
@@ -97,6 +104,38 @@ export type CatalogEnrichmentResult = {
 
 export type GeneratedLessonPlan = z.infer<typeof lessonPlanSchema>;
 export type GeneratedFlashcardDeck = z.infer<typeof flashcardDeckSchema>;
+export type SearchQuestionAnswerResult = z.infer<typeof searchQuestionAnswerSchema>;
+export type SearchQuestionContextWord = {
+  id: string;
+  slug: string;
+  lemma: string;
+  syllabics?: string | null;
+  plainEnglish: string;
+  partOfSpeech: string;
+  linguisticClass?: string | null;
+  rootStem?: string | null;
+  beginnerExplanation?: string | null;
+  expertExplanation?: string | null;
+  notes?: string | null;
+  source?: string | null;
+  itwewinaMetadata?: ItwewinaMetadata | null;
+  categories: string[];
+  meanings: Array<{
+    gloss: string;
+    description?: string | null;
+  }>;
+  morphologyTables: Array<{
+    title: string;
+    description?: string | null;
+    isPlainEnglish: boolean;
+    entries: Array<{
+      rowLabel: string;
+      columnLabel?: string | null;
+      plainLabel?: string | null;
+      value: string;
+    }>;
+  }>;
+};
 
 function chunkItems<T>(items: T[], size: number) {
   const chunks: T[][] = [];
@@ -604,4 +643,60 @@ export async function generateFlashcardDeck(wordIds: string[]) {
     },
     usedFallback: false
   };
+}
+
+export async function answerSearchQuestion(question: string, contextWords: SearchQuestionContextWord[]) {
+  if (!isOpenAIConfigured()) {
+    throw new Error("OPENAI_API_KEY is not set. Add it before using AI search answers.");
+  }
+
+  if (contextWords.length === 0) {
+    throw new Error("At least one local vocabulary entry is required to answer a search question.");
+  }
+
+  return generateStructuredObject({
+    task: "searchQuestion",
+    schema: searchQuestionAnswerSchema,
+    schemaName: "search_question_answer",
+    reasoningEffort: "medium",
+    instructions: [
+      "You are helping a learner ask dictionary-style questions about Plains Cree words.",
+      "Answer using only the supplied local vocabulary records.",
+      "Do not invent meanings, grammatical facts, or paradigm details that are not supported by the input.",
+      "If the supplied records are not enough to answer clearly, set status to insufficient_context.",
+      "Keep the answer concise, learner-friendly, and grounded in the provided word data.",
+      "Only include matchedWordIds that appear in the supplied records."
+    ].join("\n"),
+    input: JSON.stringify(
+      {
+        question,
+        records: contextWords.map((word) => ({
+          id: word.id,
+          slug: word.slug,
+          lemma: word.lemma,
+          syllabics: word.syllabics,
+          plainEnglish: word.plainEnglish,
+          partOfSpeech: word.partOfSpeech,
+          linguisticClass: word.linguisticClass,
+          rootStem: word.rootStem,
+          beginnerExplanation: word.beginnerExplanation,
+          expertExplanation: word.expertExplanation,
+          notes: word.notes,
+          source: word.source,
+          categories: word.categories,
+          itwewinaMetadata: word.itwewinaMetadata,
+          meanings: word.meanings,
+          morphologyTables: word.morphologyTables.map((table) => ({
+            title: table.title,
+            description: table.description,
+            isPlainEnglish: table.isPlainEnglish,
+            entryCount: table.entries.length,
+            sampleEntries: table.entries.slice(0, 18)
+          }))
+        }))
+      },
+      null,
+      2
+    )
+  });
 }

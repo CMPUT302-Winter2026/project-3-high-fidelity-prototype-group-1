@@ -16,7 +16,7 @@ export default async function HomePage() {
         <p className="section-label">Search</p>
         <h2 className="mt-2 text-2xl text-slate-900">Start with a Cree or English word</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          Search by lemma, gloss, or partial match to jump straight into a word detail card.
+          Search by lemma, gloss, or partial match, or ask a question about a word to get a grounded AI explanation.
         </p>
         <div className="mt-4">
           <SearchBar />

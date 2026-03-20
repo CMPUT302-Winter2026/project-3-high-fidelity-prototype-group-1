@@ -13,7 +13,7 @@ type SearchBarProps = {
 export function SearchBar({
   initialQuery = "",
   action = "/search",
-  placeholder = "Search Cree or English"
+  placeholder = "Search Cree or English, or ask a question"
 }: SearchBarProps) {
   const [query, setQuery] = useState(initialQuery);
   const router = useRouter();
