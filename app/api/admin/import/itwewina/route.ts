@@ -3,7 +3,6 @@ import { z } from "zod";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { hasAdminAccessFromRequest, unauthorizedAdminResponse } from "@/lib/admin";
-import { enrichVocabularyCatalogWithAI } from "@/lib/ai";
 import { importWords } from "@/lib/importers";
 import { buildItwewinaImportBatch, type ItwewinaImportProgressEvent } from "@/lib/itwewina";
 
@@ -21,7 +20,6 @@ type ItwewinaImportStreamEvent =
       type: "result";
       importedCount: number;
       queryCount: number;
-      ai?: Awaited<ReturnType<typeof enrichVocabularyCatalogWithAI>>;
       warnings?: string[];
     }
   | {
@@ -75,39 +73,10 @@ export async function POST(request: NextRequest) {
             unitLabel: "matched entries"
           });
 
-          const result = await importWords(parsed.words);
-          const warnings = [...parsed.warnings];
-          let ai: Awaited<ReturnType<typeof enrichVocabularyCatalogWithAI>> | undefined;
-
-          send({
-            type: "progress",
-            stage: "finalizing",
-            completed: 0,
-            total: 0,
-            status: "Imported entries saved. Running AI categorization, relation mapping, and explanation writing.",
-            unitLabel: "AI batches"
+          const result = await importWords(parsed.words, {
+            preserveDemoFallbacks: false
           });
-
-          try {
-            ai = await enrichVocabularyCatalogWithAI({
-              onProgress(event) {
-                send({
-                  type: "progress",
-                  stage: "finalizing",
-                  completed: event.completed,
-                  total: event.total,
-                  status: event.status,
-                  unitLabel: "AI batches"
-                });
-              }
-            });
-
-            if (ai.warning) {
-              warnings.push(ai.warning);
-            }
-          } catch (error) {
-            warnings.push(`AI enrichment skipped: ${error instanceof Error ? error.message : "Unknown error."}`);
-          }
+          const warnings = [...parsed.warnings];
 
           revalidatePath("/");
           revalidatePath("/search");
@@ -118,7 +87,6 @@ export async function POST(request: NextRequest) {
             type: "result",
             importedCount: result.importedCount,
             queryCount: parsed.queryCount,
-            ai,
             warnings: warnings.length > 0 ? warnings : undefined
           });
         } catch (error) {

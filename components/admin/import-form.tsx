@@ -39,15 +39,6 @@ type ItwewinaImportResultEvent = {
   type: "result";
   importedCount: number;
   queryCount: number;
-  ai?: {
-    skipped: boolean;
-    processedWords: number;
-    addedCategoryAssignments: number;
-    addedRelations: number;
-    addedBeginnerExplanations: number;
-    addedExpertExplanations: number;
-    warning?: string;
-  };
   warnings?: string[];
 };
 
@@ -59,6 +50,26 @@ type ItwewinaImportErrorEvent = {
 type ItwewinaImportStreamEvent =
   | ItwewinaImportProgressEvent
   | ItwewinaImportResultEvent
+  | ItwewinaImportErrorEvent;
+
+type AiEnrichmentResultEvent = {
+  type: "result";
+  summary: AiImportSummary;
+  warnings?: string[];
+};
+
+type ItwewinaPageEnrichmentResultEvent = {
+  type: "result";
+  processedCount: number;
+  warnings?: string[];
+};
+
+type EnrichmentMode = "ai" | "itwewina";
+
+type EnrichmentStreamEvent =
+  | ItwewinaImportProgressEvent
+  | AiEnrichmentResultEvent
+  | ItwewinaPageEnrichmentResultEvent
   | ItwewinaImportErrorEvent;
 
 type AiImportSummary = {
@@ -74,35 +85,36 @@ type AiImportSummary = {
 function buildImportMessage({
   importedCount,
   queryCount,
-  warnings,
-  ai
+  warnings
 }: {
   importedCount: number;
   queryCount?: number;
   warnings: string[];
-  ai?: AiImportSummary;
 }) {
   const baseMessage = queryCount
     ? `Imported ${importedCount} entries from ${queryCount} itwewina search term(s).`
     : `Imported ${importedCount} entries.`;
 
-  if (!ai) {
-    return warnings.length > 0 ? `${baseMessage} Completed with ${warnings.length} warning(s).` : baseMessage;
-  }
+  return warnings.length > 0 ? `${baseMessage} Completed with ${warnings.length} warning(s).` : baseMessage;
+}
 
+function buildAiEnrichmentMessage(ai: AiImportSummary) {
   if (ai.skipped) {
-    return `${baseMessage} AI enrichment was skipped.`;
+    return "AI enrichment was skipped.";
   }
 
-  const aiMessage = `AI enrichment processed ${ai.processedWords} word${
+  return `AI enrichment processed ${ai.processedWords} word${
     ai.processedWords === 1 ? "" : "s"
   }, adding ${ai.addedCategoryAssignments} category assignment${
     ai.addedCategoryAssignments === 1 ? "" : "s"
   }, ${ai.addedRelations} relation${ai.addedRelations === 1 ? "" : "s"}, ${ai.addedBeginnerExplanations} beginner explanation${
     ai.addedBeginnerExplanations === 1 ? "" : "s"
   }, and ${ai.addedExpertExplanations} expert explanation${ai.addedExpertExplanations === 1 ? "" : "s"}.`;
+}
 
-  return warnings.length > 0 ? `${baseMessage} ${aiMessage} Completed with ${warnings.length} warning(s).` : `${baseMessage} ${aiMessage}`;
+function buildItwewinaPageEnrichmentMessage(processedCount: number, warnings: string[]) {
+  const baseMessage = `Enriched ${processedCount} imported Itwewina record${processedCount === 1 ? "" : "s"} with full-page data.`;
+  return warnings.length > 0 ? `${baseMessage} Completed with ${warnings.length} warning(s).` : baseMessage;
 }
 
 function buildProgressPercent(progress: ItwewinaProgressState) {
@@ -122,9 +134,9 @@ function buildProgressPercent(progress: ItwewinaProgressState) {
   return Math.min(100, percent);
 }
 
-async function readItwewinaImportStream(
+async function readJsonLineStream<EventType>(
   response: Response,
-  onEvent: (event: ItwewinaImportStreamEvent) => void
+  onEvent: (event: EventType) => void
 ) {
   const reader = response.body?.getReader();
 
@@ -147,7 +159,7 @@ async function readItwewinaImportStream(
         buffer = buffer.slice(newlineIndex + 1);
 
         if (line) {
-          onEvent(JSON.parse(line) as ItwewinaImportStreamEvent);
+          onEvent(JSON.parse(line) as EventType);
         }
 
         newlineIndex = buffer.indexOf("\n");
@@ -161,7 +173,7 @@ async function readItwewinaImportStream(
     const trailingLine = buffer.trim();
 
     if (trailingLine) {
-      onEvent(JSON.parse(trailingLine) as ItwewinaImportStreamEvent);
+      onEvent(JSON.parse(trailingLine) as EventType);
     }
   } catch (error) {
     throw new Error(
@@ -180,9 +192,16 @@ export function ImportForm() {
   const [error, setError] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<ItwewinaProgressState | null>(null);
+  const [enrichmentMessage, setEnrichmentMessage] = useState("");
+  const [enrichmentWarning, setEnrichmentWarning] = useState("");
+  const [enrichmentError, setEnrichmentError] = useState("");
+  const [isEnrichmentRunning, setIsEnrichmentRunning] = useState(false);
+  const [enrichmentProgress, setEnrichmentProgress] = useState<ItwewinaProgressState | null>(null);
+  const [activeEnrichment, setActiveEnrichment] = useState<EnrichmentMode | null>(null);
   const router = useRouter();
   const isItwewinaMode = mode === "itwewina";
   const progressPercent = progress ? buildProgressPercent(progress) : 0;
+  const enrichmentProgressPercent = enrichmentProgress ? buildProgressPercent(enrichmentProgress) : 0;
 
   async function runStandardImport() {
     const response = await fetch("/api/admin/import", {
@@ -195,7 +214,6 @@ export function ImportForm() {
       | {
           importedCount?: number;
           queryCount?: number;
-          ai?: AiImportSummary;
           warnings?: string[];
           error?: string;
         }
@@ -207,10 +225,9 @@ export function ImportForm() {
 
     const importedCount = payload?.importedCount ?? 0;
     const queryCount = payload?.queryCount;
-    const ai = payload?.ai;
     const warnings = payload?.warnings ?? [];
 
-    setMessage(buildImportMessage({ importedCount, queryCount, warnings, ai }));
+    setMessage(buildImportMessage({ importedCount, queryCount, warnings }));
     setWarning(warnings.join("\n"));
     router.refresh();
   }
@@ -228,7 +245,7 @@ export function ImportForm() {
     }
 
     const result = await new Promise<ItwewinaImportResultEvent>((resolve, reject) => {
-      readItwewinaImportStream(response, (event) => {
+      readJsonLineStream<ItwewinaImportStreamEvent>(response, (event) => {
         if (event.type === "progress") {
           setProgress({
             stage: event.stage,
@@ -263,11 +280,108 @@ export function ImportForm() {
       buildImportMessage({
         importedCount: result.importedCount,
         queryCount: result.queryCount,
-        warnings,
-        ai: result.ai
+        warnings
       })
     );
     setWarning(warnings.join("\n"));
+    router.refresh();
+  }
+
+  async function runAiEnrichment() {
+    const response = await fetch("/api/admin/enrich/ai", {
+      method: "POST"
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(payload?.error ?? "Enrichment failed.");
+    }
+
+    const result = await new Promise<AiEnrichmentResultEvent>((resolve, reject) => {
+      readJsonLineStream<EnrichmentStreamEvent>(response, (event) => {
+        if (event.type === "progress") {
+          setEnrichmentProgress({
+            stage: event.stage,
+            completed: event.completed,
+            total: event.total,
+            term: event.term,
+            status: event.status,
+            unitLabel: event.unitLabel
+          });
+          return;
+        }
+
+        if ("summary" in event) {
+          resolve(event);
+          return;
+        }
+
+        if (event.type === "error") {
+          reject(new Error(event.error));
+        }
+      }).catch(reject);
+    });
+
+    const warnings = result.warnings ?? [];
+
+    setEnrichmentProgress({
+      stage: "complete",
+      completed: result.summary.processedWords,
+      total: result.summary.processedWords,
+      status: "AI enrichment complete.",
+      unitLabel: "words"
+    });
+    setEnrichmentMessage(buildAiEnrichmentMessage(result.summary));
+    setEnrichmentWarning(warnings.join("\n"));
+    router.refresh();
+  }
+
+  async function runItwewinaPageEnrichment() {
+    const response = await fetch("/api/admin/enrich/itwewina", {
+      method: "POST"
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(payload?.error ?? "Enrichment failed.");
+    }
+
+    const result = await new Promise<ItwewinaPageEnrichmentResultEvent>((resolve, reject) => {
+      readJsonLineStream<EnrichmentStreamEvent>(response, (event) => {
+        if (event.type === "progress") {
+          setEnrichmentProgress({
+            stage: event.stage,
+            completed: event.completed,
+            total: event.total,
+            term: event.term,
+            status: event.status,
+            unitLabel: event.unitLabel
+          });
+          return;
+        }
+
+        if ("processedCount" in event) {
+          resolve(event);
+          return;
+        }
+
+        if (event.type === "error") {
+          reject(new Error(event.error));
+        }
+      }).catch(reject);
+    });
+
+    const warnings = result.warnings ?? [];
+
+    setEnrichmentProgress({
+      stage: "complete",
+      completed: result.processedCount,
+      total: result.processedCount,
+      status: "Itwewina page enrichment complete.",
+      unitLabel: "imported records"
+    });
+    setEnrichmentMessage(buildItwewinaPageEnrichmentMessage(result.processedCount, warnings));
+    setEnrichmentWarning(warnings.join("\n"));
     router.refresh();
   }
 
@@ -298,6 +412,33 @@ export function ImportForm() {
       setError(importError instanceof Error ? importError.message : "Import failed.");
     } finally {
       setIsRunning(false);
+    }
+  }
+
+  async function handleEnrichment(mode: EnrichmentMode) {
+    setEnrichmentError("");
+    setEnrichmentMessage("");
+    setEnrichmentWarning("");
+    setActiveEnrichment(mode);
+    setEnrichmentProgress({
+      stage: "starting",
+      completed: 0,
+      total: 0,
+      status: mode === "ai" ? "Preparing AI enrichment." : "Preparing Itwewina page enrichment.",
+      unitLabel: mode === "ai" ? "AI batches" : "imported records"
+    });
+    setIsEnrichmentRunning(true);
+
+    try {
+      if (mode === "ai") {
+        await runAiEnrichment();
+      } else {
+        await runItwewinaPageEnrichment();
+      }
+    } catch (enrichmentRunError) {
+      setEnrichmentError(enrichmentRunError instanceof Error ? enrichmentRunError.message : "Enrichment failed.");
+    } finally {
+      setIsEnrichmentRunning(false);
     }
   }
 
@@ -339,10 +480,9 @@ export function ImportForm() {
         {isItwewinaMode ? (
           <p className="mt-2 text-sm leading-6 text-slate-600">
             Add one Cree or English search term per line. The server will fetch
-            <code> https://itwewina.altlab.app/search?q=...</code>, parse the live search results, then enrich each
-            matched entry from its full Itwêwina word page to pull related references and paradigm labels. Searches run
-            immediately, and the importer only waits when Itwêwina rate-limits or transient upstream errors trigger the
-            retry backoff. Any skipped terms or partial enrichments are listed as warnings.
+            <code> https://itwewina.altlab.app/search?q=...</code>, parse the live search results, and save the matched
+            entries to the local catalog. Full-page Itwêwina enrichment and AI enrichment now run separately from the
+            Enrichment section below so imports finish faster and avoid timing out.
           </p>
         ) : null}
 
@@ -418,9 +558,86 @@ export function ImportForm() {
         {warning ? <p className="mt-3 whitespace-pre-line text-sm text-amber-700">{warning}</p> : null}
         {error ? <p className="mt-3 whitespace-pre-line text-sm text-red-600">{error}</p> : null}
 
-        <button type="button" className="tap-button-primary mt-4" disabled={isRunning} onClick={() => void handleImport()}>
+        <button
+          type="button"
+          className="tap-button-primary mt-4"
+          disabled={isRunning || isEnrichmentRunning}
+          onClick={() => void handleImport()}
+        >
           {isRunning ? "Importing..." : "Run import"}
         </button>
+      </section>
+
+      <section className="surface-card p-5">
+        <p className="section-label">Enrichment</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Run enrichment after an import. <code>AI</code> adds explanations, categories, and relations across the local
+          catalog. <code>Itwêwina pages</code> revisits imported Itwêwina-backed records to pull paradigms, related
+          references, and audio.
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="tap-button-secondary"
+            disabled={isRunning || isEnrichmentRunning}
+            onClick={() => void handleEnrichment("ai")}
+          >
+            {isEnrichmentRunning && activeEnrichment === "ai" ? "Running AI..." : "Run AI enrichment"}
+          </button>
+          <button
+            type="button"
+            className="tap-button-secondary"
+            disabled={isRunning || isEnrichmentRunning}
+            onClick={() => void handleEnrichment("itwewina")}
+          >
+            {isEnrichmentRunning && activeEnrichment === "itwewina"
+              ? "Enriching Itwewina pages..."
+              : "Run Itwewina page enrichment"}
+          </button>
+        </div>
+
+        {enrichmentProgress ? (
+          <div className="surface-muted mt-4 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="section-label">Enrichment progress</p>
+                <p className="mt-2 text-lg text-slate-900">{enrichmentProgress.status}</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {enrichmentProgress.term ? `Current word: ${enrichmentProgress.term}` : "Current step: background processing"}
+                </p>
+              </div>
+              <div className="text-left md:text-right">
+                <p className="text-2xl font-semibold text-slate-900">{enrichmentProgressPercent}%</p>
+                <p className="text-sm text-slate-500">
+                  {enrichmentProgress.total > 0
+                    ? `${enrichmentProgress.completed} of ${enrichmentProgress.total} ${
+                        enrichmentProgress.unitLabel ?? "items"
+                      } processed`
+                    : "Waiting to start"}
+                </p>
+              </div>
+            </div>
+
+            <div
+              className="mt-4 h-3 overflow-hidden rounded-full bg-slate-200"
+              aria-label="Enrichment progress"
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={enrichmentProgressPercent}
+              role="progressbar"
+            >
+              <div
+                className="h-full rounded-full bg-moss-700 transition-all duration-300"
+                style={{ width: `${enrichmentProgressPercent}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {enrichmentMessage ? <p className="mt-3 whitespace-pre-line text-sm text-moss-700">{enrichmentMessage}</p> : null}
+        {enrichmentWarning ? <p className="mt-3 whitespace-pre-line text-sm text-amber-700">{enrichmentWarning}</p> : null}
+        {enrichmentError ? <p className="mt-3 whitespace-pre-line text-sm text-red-600">{enrichmentError}</p> : null}
       </section>
 
       <section className="surface-card p-5">
@@ -442,9 +659,10 @@ export function ImportForm() {
       <section className="surface-card p-5">
         <p className="section-label">Itwewina import notes</p>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          Imported itwewina entries keep the Cree lemma, syllabics, first gloss, linguistic breakdown, stem, and a best
-          available audio link when the speech database has one. Review imported notes and explanations afterward,
-          because the source search page does not expose every field in your local schema.
+          The initial Itwewina import keeps only what the live search results expose: the Cree lemma, syllabics, first
+          gloss, part of speech, linguistic breakdown, stem, source URL, and import notes. Use the Enrichment section
+          afterward if you want AI-generated explanations or full-page Itwêwina paradigms, related references, and
+          audio.
         </p>
       </section>
     </div>

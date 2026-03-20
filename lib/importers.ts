@@ -53,6 +53,10 @@ type ExistingDemoImportWord = Prisma.WordGetPayload<{
   include: typeof demoImportOverwriteInclude;
 }>;
 
+type ImportWordsOptions = {
+  preserveDemoFallbacks?: boolean;
+};
+
 function hasTextContent(value?: string | null) {
   return (value ?? "").trim().length > 0;
 }
@@ -130,29 +134,29 @@ function findDemoWordByPlainEnglish(
 function buildImportWordPayload(
   word: ImportWordPayload,
   categoryIds: string[],
-  existingDemoWord?: ExistingDemoImportWord
+  existingDemoWord?: ExistingDemoImportWord,
+  options: ImportWordsOptions = {}
 ): WordFormPayload {
-  const fallbackCategoryIds = existingDemoWord?.categories.map((entry) => entry.categoryId) ?? [];
-  const fallbackMeanings = existingDemoWord ? mapExistingMeanings(existingDemoWord.meanings) : [];
-  const fallbackMorphologyTables = existingDemoWord
-    ? mapExistingMorphologyTables(existingDemoWord.morphologyTables)
-    : [];
+  const fallbackDemoWord = options.preserveDemoFallbacks ? existingDemoWord : undefined;
+  const fallbackCategoryIds = fallbackDemoWord?.categories.map((entry) => entry.categoryId) ?? [];
+  const fallbackMeanings = fallbackDemoWord ? mapExistingMeanings(fallbackDemoWord.meanings) : [];
+  const fallbackMorphologyTables = fallbackDemoWord ? mapExistingMorphologyTables(fallbackDemoWord.morphologyTables) : [];
 
   return {
-    lemma: chooseImportedText(word.lemma, existingDemoWord?.lemma),
-    syllabics: chooseImportedText(word.syllabics, existingDemoWord?.syllabics),
-    plainEnglish: chooseImportedText(word.plainEnglish, existingDemoWord?.plainEnglish),
-    partOfSpeech: chooseImportedText(word.partOfSpeech, existingDemoWord?.partOfSpeech),
-    linguisticClass: chooseImportedText(word.linguisticClass, existingDemoWord?.linguisticClass),
-    rootStem: chooseImportedText(word.rootStem, existingDemoWord?.rootStem),
-    pronunciation: chooseImportedText(word.pronunciation, existingDemoWord?.pronunciation),
-    audioUrl: chooseImportedText(word.audioUrl, existingDemoWord?.audioUrl),
-    source: chooseImportedText(word.source, existingDemoWord?.source),
-    notes: chooseImportedText(word.notes, existingDemoWord?.notes),
+    lemma: chooseImportedText(word.lemma, fallbackDemoWord?.lemma),
+    syllabics: chooseImportedText(word.syllabics, fallbackDemoWord?.syllabics),
+    plainEnglish: chooseImportedText(word.plainEnglish, fallbackDemoWord?.plainEnglish),
+    partOfSpeech: chooseImportedText(word.partOfSpeech, fallbackDemoWord?.partOfSpeech),
+    linguisticClass: chooseImportedText(word.linguisticClass, fallbackDemoWord?.linguisticClass),
+    rootStem: chooseImportedText(word.rootStem, fallbackDemoWord?.rootStem),
+    pronunciation: chooseImportedText(word.pronunciation, fallbackDemoWord?.pronunciation),
+    audioUrl: chooseImportedText(word.audioUrl, fallbackDemoWord?.audioUrl),
+    source: chooseImportedText(word.source, fallbackDemoWord?.source),
+    notes: chooseImportedText(word.notes, fallbackDemoWord?.notes),
     itwewinaMetadata:
-      word.itwewinaMetadata ?? (existingDemoWord?.itwewinaMetadata as ImportWordPayload["itwewinaMetadata"] | null) ?? undefined,
-    beginnerExplanation: chooseImportedText(word.beginnerExplanation, existingDemoWord?.beginnerExplanation),
-    expertExplanation: chooseImportedText(word.expertExplanation, existingDemoWord?.expertExplanation),
+      word.itwewinaMetadata ?? (fallbackDemoWord?.itwewinaMetadata as ImportWordPayload["itwewinaMetadata"] | null) ?? undefined,
+    beginnerExplanation: chooseImportedText(word.beginnerExplanation, fallbackDemoWord?.beginnerExplanation),
+    expertExplanation: chooseImportedText(word.expertExplanation, fallbackDemoWord?.expertExplanation),
     categoryIds: categoryIds.length > 0 ? categoryIds : fallbackCategoryIds,
     meanings: word.meanings.length > 0 ? word.meanings : fallbackMeanings,
     morphologyTables: word.morphologyTables.length > 0 ? word.morphologyTables : fallbackMorphologyTables,
@@ -163,13 +167,14 @@ function buildImportWordPayload(
 
 function buildImportRelationSource(
   word: ImportWordPayload,
-  existingDemoWord?: ExistingDemoImportWord
+  existingDemoWord?: ExistingDemoImportWord,
+  options: ImportWordsOptions = {}
 ): NonNullable<ImportWordPayload["relations"]> {
   if ((word.relations ?? []).length > 0) {
     return word.relations ?? [];
   }
 
-  return existingDemoWord ? mapExistingRelations(existingDemoWord.outgoingRelations) : [];
+  return options.preserveDemoFallbacks && existingDemoWord ? mapExistingRelations(existingDemoWord.outgoingRelations) : [];
 }
 
 function parseJsonPayload(rawText: string) {
@@ -293,8 +298,9 @@ function buildCategoryIds(word: ImportWordPayload, categoryMap: Map<string, stri
   return [...directIds, ...slugIds, ...nameIds].filter((value): value is string => Boolean(value));
 }
 
-export async function importWords(words: ImportWordPayload[]) {
+export async function importWords(words: ImportWordPayload[], options: ImportWordsOptions = {}) {
   const batch = importBatchSchema.parse(words);
+  const preserveDemoFallbacks = options.preserveDemoFallbacks ?? true;
   const categoryMap = await ensureCategoryIdMaps(batch);
 
   const existingWords = await prisma.word.findMany({
@@ -332,7 +338,7 @@ export async function importWords(words: ImportWordPayload[]) {
 
     let existingDemoWord: ExistingDemoImportWord | undefined;
 
-    if (existing?.isDemo && !word.isDemo) {
+    if (existing?.isDemo && !word.isDemo && preserveDemoFallbacks) {
       existingDemoWord = demoOverwriteCache.get(existing.id);
 
       if (!existingDemoWord) {
@@ -350,8 +356,12 @@ export async function importWords(words: ImportWordPayload[]) {
       }
     }
 
-    const payload = buildImportWordPayload(word, categoryIds, existingDemoWord);
-    const relationSource = buildImportRelationSource(word, existingDemoWord);
+    const payload = buildImportWordPayload(word, categoryIds, existingDemoWord, {
+      preserveDemoFallbacks
+    });
+    const relationSource = buildImportRelationSource(word, existingDemoWord, {
+      preserveDemoFallbacks
+    });
 
     const saved = await saveWordCore(
       {

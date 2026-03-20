@@ -1,3 +1,5 @@
+import { Prisma } from "@/generated/prisma/client";
+import { prisma } from "@/lib/prisma";
 import type {
   ImportWordPayload,
   ItwewinaMetadata,
@@ -76,6 +78,11 @@ export type ItwewinaImportBatch = {
   warnings: string[];
 };
 
+export type ItwewinaPageEnrichmentResult = {
+  processedCount: number;
+  warnings: string[];
+};
+
 type ItwewinaTableCell = {
   tag: "th" | "td";
   attributes: Record<string, string>;
@@ -95,6 +102,29 @@ export type ItwewinaImportProgressEvent = {
 type BuildItwewinaImportBatchOptions = {
   onProgress?: (event: ItwewinaImportProgressEvent) => Promise<void> | void;
 };
+
+const itwewinaPageEnrichmentWordSelect = {
+  id: true,
+  lemma: true,
+  syllabics: true,
+  plainEnglish: true,
+  partOfSpeech: true,
+  linguisticClass: true,
+  rootStem: true,
+  audioUrl: true,
+  source: true,
+  itwewinaMetadata: true,
+  meanings: {
+    orderBy: [{ sortOrder: "asc" }],
+    select: {
+      gloss: true
+    }
+  }
+} satisfies Prisma.WordSelect;
+
+type ItwewinaPageEnrichmentWord = Prisma.WordGetPayload<{
+  select: typeof itwewinaPageEnrichmentWordSelect;
+}>;
 
 type ItwewinaRetryHandler = (event: {
   error: ItwewinaSearchError;
@@ -414,27 +444,6 @@ function buildNotes(entry: ItwewinaSearchEntry) {
   return details.join(" | ");
 }
 
-function buildExpertExplanation(entry: ItwewinaSearchEntry) {
-  const details: string[] = [];
-  const inflectionalClass = entry.itwewinaMetadata?.inflectionalClass;
-
-  if (inflectionalClass?.description) {
-    details.push(inflectionalClass.description);
-  }
-
-  if (entry.rootStem) {
-    details.push(`Stem: ${entry.rootStem}`);
-  }
-
-  if (entry.itwewinaMetadata?.relatedReferences?.length) {
-    details.push(
-      `Related references: ${entry.itwewinaMetadata.relatedReferences.map(formatRelatedReference).join("; ")}`
-    );
-  }
-
-  return details.join(". ");
-}
-
 function mapEntryToImportWord(entry: ItwewinaSearchEntry): ImportWordPayload {
   const meanings: MeaningInput[] = entry.meanings.map((gloss, index) => ({
     gloss,
@@ -455,7 +464,7 @@ function mapEntryToImportWord(entry: ItwewinaSearchEntry): ImportWordPayload {
     notes: buildNotes(entry),
     itwewinaMetadata: entry.itwewinaMetadata,
     beginnerExplanation: "",
-    expertExplanation: buildExpertExplanation(entry),
+    expertExplanation: "",
     categoryIds: [],
     meanings,
     morphologyTables: entry.morphologyTables,
@@ -491,6 +500,31 @@ function mergeEntries(entries: ItwewinaSearchEntry[]) {
   }
 
   return Array.from(merged.values());
+}
+
+function mapStoredWordToSearchEntry(word: ItwewinaPageEnrichmentWord): ItwewinaSearchEntry | null {
+  if (!word.source?.includes(ITWEWINA_BASE_URL)) {
+    return null;
+  }
+
+  const meanings = uniqueBy(
+    word.meanings.map((meaning) => meaning.gloss.trim()).filter(Boolean),
+    (meaning) => meaning.toLowerCase()
+  );
+
+  return {
+    lemma: word.lemma,
+    syllabics: emptyToUndefined(word.syllabics),
+    partOfSpeech: word.partOfSpeech,
+    linguisticClass: emptyToUndefined(word.linguisticClass),
+    rootStem: emptyToUndefined(word.rootStem),
+    meanings: meanings.length > 0 ? meanings : [word.plainEnglish],
+    wordUrl: word.source,
+    sourceQuery: word.plainEnglish,
+    audioUrl: emptyToUndefined(word.audioUrl),
+    itwewinaMetadata: (word.itwewinaMetadata as ItwewinaMetadata | null | undefined) ?? undefined,
+    morphologyTables: []
+  };
 }
 
 function normalizeWordformKey(value: string) {
@@ -1078,10 +1112,14 @@ function parseSearchTerms(rawText: string) {
   );
 }
 
-export async function buildItwewinaImportBatch(
+async function fetchItwewinaSearchEntries(
   rawText: string,
   options: BuildItwewinaImportBatchOptions = {}
-): Promise<ItwewinaImportBatch> {
+): Promise<{
+  queryCount: number;
+  entries: ItwewinaSearchEntry[];
+  warnings: string[];
+}> {
   const searchTerms = parseSearchTerms(rawText);
 
   if (searchTerms.length === 0) {
@@ -1165,23 +1203,84 @@ export async function buildItwewinaImportBatch(
     throw new Error(buildImportFailureMessage(warnings));
   }
 
-  const mergedEntries = mergeEntries(fetchedEntries);
+  return {
+    queryCount: searchTerms.length,
+    entries: mergeEntries(fetchedEntries),
+    warnings
+  };
+}
 
-  const detailedEntries = await enrichEntriesWithWordDetails(mergedEntries, {
-    onProgress: async (event) => {
-      await reportProgress(options, {
-        stage: "enriching",
-        completed: event.completed,
-        total: event.total,
-        term: event.term,
-        status: event.status,
-        unitLabel: "matched entries"
-      });
-    }
+export async function buildItwewinaImportBatch(
+  rawText: string,
+  options: BuildItwewinaImportBatchOptions = {}
+): Promise<ItwewinaImportBatch> {
+  const parsed = await fetchItwewinaSearchEntries(rawText, options);
+
+  return {
+    queryCount: parsed.queryCount,
+    words: parsed.entries.map(mapEntryToImportWord),
+    warnings: parsed.warnings
+  };
+}
+
+export async function enrichImportedWordsWithItwewinaPages(
+  options: BuildItwewinaImportBatchOptions = {}
+): Promise<ItwewinaPageEnrichmentResult> {
+  const storedWords = await prisma.word.findMany({
+    where: {
+      source: {
+        contains: ITWEWINA_BASE_URL
+      }
+    },
+    orderBy: [{ lemma: "asc" }],
+    select: itwewinaPageEnrichmentWordSelect
   });
-  warnings.push(...detailedEntries.warnings);
 
-  const entries = await enrichEntriesWithAudio(detailedEntries.entries, {
+  const targets = storedWords
+    .map((word) => {
+      const entry = mapStoredWordToSearchEntry(word);
+
+      return entry
+        ? {
+            wordId: word.id,
+            entry
+          }
+        : null;
+    })
+    .filter((target): target is { wordId: string; entry: ItwewinaSearchEntry } => Boolean(target));
+
+  if (targets.length === 0) {
+    return {
+      processedCount: 0,
+      warnings: []
+    };
+  }
+
+  await reportProgress(options, {
+    stage: "starting",
+    completed: 0,
+    total: targets.length,
+    status: `Preparing ${targets.length} imported Itwewina record(s) for page enrichment.`,
+    unitLabel: "imported records"
+  });
+
+  const detailedEntries = await enrichEntriesWithWordDetails(
+    targets.map((target) => target.entry),
+    {
+      onProgress: async (event) => {
+        await reportProgress(options, {
+          stage: "enriching",
+          completed: event.completed,
+          total: event.total,
+          term: event.term,
+          status: event.status,
+          unitLabel: "imported records"
+        });
+      }
+    }
+  );
+
+  const entriesWithAudio = await enrichEntriesWithAudio(detailedEntries.entries, {
     onProgress: async (event) => {
       await reportProgress(options, {
         stage: "finalizing",
@@ -1193,9 +1292,50 @@ export async function buildItwewinaImportBatch(
     }
   });
 
+  for (const [index, target] of targets.entries()) {
+    const entry = entriesWithAudio[index];
+
+    if (!entry) {
+      continue;
+    }
+
+    await prisma.word.update({
+      where: { id: target.wordId },
+      data: {
+        linguisticClass: entry.linguisticClass ?? null,
+        rootStem: entry.rootStem ?? null,
+        audioUrl: entry.audioUrl ?? null,
+        itwewinaMetadata: entry.itwewinaMetadata
+          ? (entry.itwewinaMetadata as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        morphologyTables: {
+          deleteMany: {},
+          ...(entry.morphologyTables.length > 0
+            ? {
+                create: entry.morphologyTables.map((table) => ({
+                  title: table.title,
+                  description: table.description,
+                  isPlainEnglish: table.isPlainEnglish,
+                  sortOrder: table.sortOrder,
+                  entries: {
+                    create: table.entries.map((morphologyEntry) => ({
+                      rowLabel: morphologyEntry.rowLabel,
+                      columnLabel: morphologyEntry.columnLabel,
+                      plainLabel: morphologyEntry.plainLabel,
+                      value: morphologyEntry.value,
+                      sortOrder: morphologyEntry.sortOrder
+                    }))
+                  }
+                }))
+              }
+            : {})
+        }
+      }
+    });
+  }
+
   return {
-    queryCount: searchTerms.length,
-    words: entries.map(mapEntryToImportWord),
-    warnings
+    processedCount: targets.length,
+    warnings: detailedEntries.warnings
   };
 }
