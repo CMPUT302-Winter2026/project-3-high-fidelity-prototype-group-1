@@ -1,2 +1,255 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/_iCgzE0B)
-# p3_template
+# Vocabulary Explorer
+
+Vocabulary Explorer is a mobile-first MVP prototype for the University of Alberta Language Technology Lab (ALTLab). It helps Plains Cree learners explore vocabulary by theme, meaning, and relation, while also giving expert users access to richer grammatical and morphological detail.
+
+The project is built with:
+
+- Next.js App Router
+- TypeScript
+- Tailwind CSS
+- Prisma ORM
+- PostgreSQL
+- Docker + docker-compose
+- Seeded demo data for ALTLab-style vocabulary exploration
+
+## What’s Included
+
+Public routes:
+
+- `/`
+- `/search`
+- `/category/[slug]`
+- `/word/[slug]`
+- `/word/[slug]/map`
+- `/saved`
+- `/settings`
+
+Admin routes:
+
+- `/admin`
+- `/admin/words`
+- `/admin/words/new`
+- `/admin/words/[id]/edit`
+- `/admin/import`
+
+Core MVP features:
+
+- mobile-first browsing and search
+- novice / expert word detail modes
+- local bookmarks via `localStorage`
+- local settings for font size, Cree/English emphasis, and syllabics display
+- simple semantic map view
+- admin CRUD for words
+- category manager
+- JSON and CSV import flow
+- Prisma schema and seed script
+- Dockerfile + compose setup for Coolify/local deployment
+
+## Proposed Folder Structure
+
+```text
+.
+├── app
+│   ├── admin
+│   ├── api
+│   ├── category/[slug]
+│   ├── search
+│   ├── settings
+│   ├── saved
+│   └── word/[slug]
+├── components
+│   ├── admin
+│   ├── home
+│   ├── navigation
+│   ├── providers
+│   ├── saved
+│   ├── search
+│   ├── settings
+│   ├── ui
+│   └── word
+├── lib
+├── prisma
+│   ├── migrations
+│   ├── schema.prisma
+│   └── seed.ts
+├── types
+├── Dockerfile
+├── docker-compose.yml
+└── .env.example
+```
+
+## Architecture
+
+The app uses Next.js App Router for both public pages and admin pages. Public pages are mostly server-rendered and fetch data directly through Prisma-backed query helpers. Interactive concerns such as bookmarks, settings, and novice/expert toggles are handled in small client components.
+
+The admin area is also built inside the App Router. CRUD and import actions submit to route handlers under `app/api/admin/*`, which validate payloads with Zod and persist data through shared Prisma service functions. Categories, meanings, morphology tables, and relations are normalized so seeded data can later be replaced with real ALTLab lexical data without rewriting the UI.
+
+## Prisma Schema
+
+The schema lives in `prisma/schema.prisma`.
+
+Main models:
+
+- `Word`
+- `WordMeaning`
+- `MorphologyTable`
+- `MorphologyEntry`
+- `Relation`
+- `Category`
+- `WordCategory`
+- `SavedWord`
+- `MediaAsset`
+
+Highlights:
+
+- `Word` stores the main lexical entry and beginner/expert explanations.
+- `WordMeaning` supports multiple glosses and descriptions.
+- `MorphologyTable` and `MorphologyEntry` support paradigm-style expert data and plain-English learner labels.
+- `Relation` connects words with relation types such as `synonym`, `broader`, `similar`, and `associated`.
+- `Category` and `WordCategory` support theme browsing and reusable category management.
+
+## Local Setup
+
+1. Copy the environment template:
+
+```bash
+cp .env.example .env
+```
+
+2. Start PostgreSQL:
+
+```bash
+docker compose up -d db
+```
+
+3. Install dependencies:
+
+```bash
+npm install
+```
+
+4. Generate Prisma client and run migrations:
+
+```bash
+npx prisma generate
+npx prisma migrate dev
+```
+
+5. Seed the demo data:
+
+```bash
+npm run db:seed
+```
+
+6. Start the app:
+
+```bash
+npm run dev
+```
+
+7. Open:
+
+```text
+http://localhost:3000
+http://localhost:3000/admin
+```
+
+Admin unlock code defaults to the value in `.env`:
+
+```text
+ADMIN_ACCESS_CODE=altlab-demo-admin
+```
+
+## Exact Useful Commands
+
+```bash
+npm install
+npx prisma generate
+npx prisma migrate dev
+npm run db:seed
+npm run dev
+```
+
+Production-oriented commands:
+
+```bash
+npm run build
+npm run start
+npx prisma migrate deploy
+```
+
+## Docker and Compose
+
+Bring up the full stack locally:
+
+```bash
+docker compose up --build
+```
+
+This will start:
+
+- PostgreSQL on port `5432`
+- Next.js app on port `3000`
+
+## Coolify Deployment Steps
+
+1. Push this repository to GitHub, GitLab, or another Git source connected to Coolify.
+2. In Coolify, create a new project and add a new application from the repo.
+3. Choose Dockerfile-based deployment.
+4. Set the port to `3000`.
+5. Add or attach a PostgreSQL database service in Coolify.
+6. Set these environment variables in the app service:
+
+```text
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public
+NEXT_PUBLIC_APP_URL=https://your-app-domain.example
+ADMIN_ACCESS_CODE=choose-a-secret-admin-code
+PORT=3000
+```
+
+7. Deploy the app.
+8. After the database is reachable, run Prisma migrations:
+
+```bash
+npx prisma migrate deploy
+```
+
+9. Seed demo data if you want the prototype content loaded:
+
+```bash
+npm run db:seed
+```
+
+10. Visit the deployed app and unlock `/admin` with `ADMIN_ACCESS_CODE`.
+
+Notes for Coolify:
+
+- The Dockerfile already exposes port `3000`.
+- The container startup command runs `prisma migrate deploy` before `next start`.
+- `NEXT_PUBLIC_APP_URL` should match the public URL you assign in Coolify.
+
+## Import Notes
+
+The import page supports:
+
+- JSON paste/import
+- CSV upload/paste
+
+For CSV:
+
+- use one row per word
+- use JSON arrays inside cells for nested fields like `meanings`, `morphologyTables`, and `relations`
+- or provide `categorySlugs` as a pipe-separated list such as `body-parts|animals`
+
+An example JSON payload is prefilled on `/admin/import`.
+
+## Seed Data Notes
+
+The seed data is intentionally marked as demo content. It is designed to:
+
+- populate the body parts category with 10+ entries
+- add a few animals, weather, and colour terms
+- demonstrate novice/expert toggling with at least one richer morphology example
+- populate semantic relations for the graph and related-word sections
+
+This prototype is ready for real, verified ALTLab data to replace the demo content later.

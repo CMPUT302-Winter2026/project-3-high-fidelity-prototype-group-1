@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RelationType {
+  synonym
+  antonym
+  broader
+  narrower
+  associated
+  categoryMember
+  variant
+  similar
+}
+
+enum MediaKind {
+  audio
+  image
+}
+
+model Word {
+  id                   String            @id @default(cuid())
+  lemma                String
+  syllabics            String?
+  slug                 String            @unique
+  plainEnglish         String
+  partOfSpeech         String
+  linguisticClass      String?
+  rootStem             String?
+  pronunciation        String?
+  audioUrl             String?
+  beginnerExplanation  String?
+  expertExplanation    String?
+  notes                String?
+  source               String?
+  isDemo               Boolean           @default(false)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  categories           WordCategory[]
+  incomingRelations    Relation[]        @relation("ToWord")
+  mediaAssets          MediaAsset[]
+  meanings             WordMeaning[]
+  morphologyTables     MorphologyTable[]
+  outgoingRelations    Relation[]        @relation("FromWord")
+  savedWords           SavedWord[]
+
+  @@index([lemma])
+  @@index([plainEnglish])
+}
+
+model WordMeaning {
+  id          String  @id @default(cuid())
+  wordId      String
+  gloss       String
+  description String?
+  sortOrder   Int     @default(0)
+  word        Word    @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@index([wordId, sortOrder])
+}
+
+model MorphologyTable {
+  id             String            @id @default(cuid())
+  wordId         String
+  title          String
+  description    String?
+  isPlainEnglish Boolean           @default(false)
+  sortOrder      Int               @default(0)
+  createdAt      DateTime          @default(now())
+  entries        MorphologyEntry[]
+  word           Word              @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@index([wordId, sortOrder])
+}
+
+model MorphologyEntry {
+  id          String           @id @default(cuid())
+  tableId     String
+  rowLabel    String
+  columnLabel String?
+  plainLabel  String?
+  value       String
+  sortOrder   Int              @default(0)
+  table       MorphologyTable  @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@index([tableId, sortOrder])
+}
+
+model Relation {
+  id              String       @id @default(cuid())
+  fromWordId      String
+  toWordId        String
+  relationType    RelationType
+  label           String?
+  isBidirectional Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  fromWord        Word         @relation("FromWord", fields: [fromWordId], references: [id], onDelete: Cascade)
+  toWord          Word         @relation("ToWord", fields: [toWordId], references: [id], onDelete: Cascade)
+
+  @@unique([fromWordId, toWordId, relationType])
+  @@index([fromWordId])
+  @@index([toWordId])
+}
+
+model Category {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  slug        String         @unique
+  description String?
+  colorToken  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  words       WordCategory[]
+
+  @@index([slug])
+}
+
+model WordCategory {
+  wordId     String
+  categoryId String
+  sortOrder  Int      @default(0)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  word       Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@id([wordId, categoryId])
+  @@index([categoryId, sortOrder])
+}
+
+model SavedWord {
+  id        String   @id @default(cuid())
+  clientKey String
+  wordId    String
+  createdAt DateTime @default(now())
+  word      Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@unique([clientKey, wordId])
+  @@index([wordId])
+}
+
+model MediaAsset {
+  id        String    @id @default(cuid())
+  wordId    String
+  kind      MediaKind
+  url       String
+  altText   String?
+  createdAt DateTime  @default(now())
+  word      Word      @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@index([wordId])
+}

@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(216, 232, 215, 0.72), transparent 28%),
+    linear-gradient(180deg, #fcf6ee 0%, #f8f1e6 48%, #f4ecdf 100%);
+}
+
+body {
+  min-height: 100vh;
+  color: #1f2933;
+  font-family: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-font-size="compact"] {
+  font-size: 15px;
+}
+
+html[data-font-size="comfortable"] {
+  font-size: 16px;
+}
+
+html[data-font-size="large"] {
+  font-size: 18px;
+}
+
+@layer components {
+  .page-width {
+    @apply mx-auto w-full max-w-md px-4 pb-28 pt-6;
+  }
+
+  .surface-card {
+    @apply rounded-4xl border border-white/70 bg-white/80 shadow-card backdrop-blur-md;
+  }
+
+  .surface-muted {
+    @apply rounded-3xl border border-slate-200/80 bg-slate-50/90;
+  }
+
+  .section-label {
+    @apply text-xs font-semibold uppercase tracking-[0.24em] text-slate-500;
+  }
+
+  .app-input {
+    @apply w-full rounded-3xl border border-slate-200 bg-white/95 px-4 py-3.5 text-sm text-ink shadow-sm outline-none transition focus:border-moss-500 focus:ring-2 focus:ring-moss-100;
+  }
+
+  .tap-button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-3xl px-4 py-3 text-sm font-semibold transition;
+  }
+
+  .tap-button-primary {
+    @apply tap-button bg-moss-700 text-white shadow-card hover:bg-moss-900;
+  }
+
+  .tap-button-secondary {
+    @apply tap-button border border-slate-200 bg-white/90 text-slate-700 hover:border-moss-100 hover:text-moss-900;
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600;
+  }
+}
