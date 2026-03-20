@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ArrowRight, BookOpen, Languages, Sparkles } from "lucide-react";
 
 import { SaveWordButton } from "@/components/word/save-word-button";
+import { PlayWordButton } from "@/components/word/play-word-button";
 import { useAppState } from "@/components/providers/app-providers";
 import { RELATION_TYPE_LABELS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -74,6 +75,11 @@ export function WordDetailView({ word }: WordDetailViewProps) {
               plainEnglish: word.plainEnglish,
               partOfSpeech: word.partOfSpeech
             }}
+          />
+          <PlayWordButton
+            lemma={word.lemma}
+            spokenText={word.pronunciation ?? word.lemma}
+            audioUrl={word.audioUrl}
           />
           <Link href={`/word/${word.slug}/map`} className="tap-button-secondary">
             <Sparkles className="mr-2 h-4 w-4" />

@@ -4,22 +4,23 @@ import { useState, useTransition } from "react";
 import { Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 
-import { IMPORT_CSV_COLUMNS, IMPORT_JSON_EXAMPLE } from "@/lib/constants";
+import { IMPORT_CSV_COLUMNS, IMPORT_ITWEWINA_EXAMPLE, IMPORT_JSON_EXAMPLE } from "@/lib/constants";
 
 export function ImportForm() {
-  const [mode, setMode] = useState<"json" | "csv">("json");
+  const [mode, setMode] = useState<"json" | "csv" | "itwewina">("json");
   const [text, setText] = useState(IMPORT_JSON_EXAMPLE);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
+  const isItwewinaMode = mode === "itwewina";
 
   return (
     <div className="space-y-4">
       <section className="surface-card p-5">
         <p className="section-label">Import mode</p>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          {(["json", "csv"] as const).map((option) => (
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {(["json", "csv", "itwewina"] as const).map((option) => (
             <button
               key={option}
               type="button"
@@ -27,17 +28,19 @@ export function ImportForm() {
                 setMode(option);
                 setError("");
                 setMessage("");
-                setText(option === "json" ? IMPORT_JSON_EXAMPLE : "");
+                setText(
+                  option === "json" ? IMPORT_JSON_EXAMPLE : option === "itwewina" ? IMPORT_ITWEWINA_EXAMPLE : ""
+                );
               }}
               className={mode === option ? "tap-button-primary" : "tap-button-secondary"}
             >
-              {option.toUpperCase()}
+              {option === "itwewina" ? "ITWEWINA" : option.toUpperCase()}
             </button>
           ))}
         </div>
 
         <label className="mt-4 block">
-          <span className="section-label">Paste or load data</span>
+          <span className="section-label">{isItwewinaMode ? "Search terms" : "Paste or load data"}</span>
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
@@ -45,13 +48,27 @@ export function ImportForm() {
           />
         </label>
 
+        {isItwewinaMode ? (
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Add one Cree or English search term per line. The server will fetch
+            <code> https://itwewina.altlab.app/search?q=...</code>, parse the live search results, and import the
+            returned entries into this app.
+          </p>
+        ) : null}
+
         <label className="tap-button-secondary mt-3 inline-flex cursor-pointer">
           <Upload className="mr-2 h-4 w-4" />
           Load file
           <input
             type="file"
             className="hidden"
-            accept={mode === "json" ? ".json,application/json" : ".csv,text/csv"}
+            accept={
+              mode === "json"
+                ? ".json,application/json"
+                : mode === "csv"
+                  ? ".csv,text/csv"
+                  : ".txt,text/plain"
+            }
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (!file) {
@@ -82,7 +99,7 @@ export function ImportForm() {
               });
 
               const payload = (await response.json().catch(() => null)) as
-                | { importedCount?: number; error?: string }
+                | { importedCount?: number; queryCount?: number; error?: string }
                 | null;
 
               if (!response.ok) {
@@ -90,7 +107,13 @@ export function ImportForm() {
                 return;
               }
 
-              setMessage(`Imported ${payload?.importedCount ?? 0} entries.`);
+              const importedCount = payload?.importedCount ?? 0;
+              const queryCount = payload?.queryCount;
+              setMessage(
+                queryCount
+                  ? `Imported ${importedCount} entries from ${queryCount} itwewina search term(s).`
+                  : `Imported ${importedCount} entries.`
+              );
               router.refresh();
             });
           }}
@@ -113,6 +136,15 @@ export function ImportForm() {
             </span>
           ))}
         </div>
+      </section>
+
+      <section className="surface-card p-5">
+        <p className="section-label">Itwewina import notes</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Imported itwewina entries keep the Cree lemma, syllabics, first gloss, linguistic breakdown, stem, and a best
+          available audio link when the speech database has one. Review imported notes and explanations afterward,
+          because the source search page does not expose every field in your local schema.
+        </p>
       </section>
     </div>
   );

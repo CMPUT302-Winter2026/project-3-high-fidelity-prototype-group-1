@@ -104,6 +104,10 @@ export const IMPORT_JSON_EXAMPLE = `[
   }
 ]`;
 
+export const IMPORT_ITWEWINA_EXAMPLE = `apple
+bear
+friend`;
+
 export const IMPORT_CSV_COLUMNS = [
   "lemma",
   "syllabics",
