@@ -102,6 +102,12 @@ export type CatalogEnrichmentResult = {
   warning?: string;
 };
 
+export type CatalogEnrichmentProgressEvent = {
+  completed: number;
+  total: number;
+  status: string;
+};
+
 export type GeneratedLessonPlan = z.infer<typeof lessonPlanSchema>;
 export type GeneratedFlashcardDeck = z.infer<typeof flashcardDeckSchema>;
 export type SearchQuestionAnswerResult = z.infer<typeof searchQuestionAnswerSchema>;
@@ -193,7 +199,9 @@ function buildFallbackFlashcardDeck(
   };
 }
 
-export async function enrichVocabularyCatalogWithAI(): Promise<CatalogEnrichmentResult> {
+export async function enrichVocabularyCatalogWithAI(options: {
+  onProgress?: (event: CatalogEnrichmentProgressEvent) => Promise<void> | void;
+} = {}): Promise<CatalogEnrichmentResult> {
   const [categories, words, existingRelations] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ name: "asc" }],
@@ -276,8 +284,23 @@ export async function enrichVocabularyCatalogWithAI(): Promise<CatalogEnrichment
   }));
 
   const suggestions: z.infer<typeof catalogWordSuggestionSchema>[] = [];
+  const enrichmentBatches = chunkItems(words, ENRICHMENT_BATCH_SIZE);
 
-  for (const batch of chunkItems(words, ENRICHMENT_BATCH_SIZE)) {
+  if (enrichmentBatches.length > 0) {
+    await options.onProgress?.({
+      completed: 0,
+      total: enrichmentBatches.length,
+      status: `Preparing AI enrichment for ${words.length} word${words.length === 1 ? "" : "s"}.`
+    });
+  }
+
+  for (const [batchIndex, batch] of enrichmentBatches.entries()) {
+    await options.onProgress?.({
+      completed: batchIndex,
+      total: enrichmentBatches.length,
+      status: `Running AI enrichment batch ${batchIndex + 1} of ${enrichmentBatches.length}.`
+    });
+
     const parsed = await generateStructuredObject({
       task: "catalogEnrichment",
       schema: catalogEnrichmentSchema,
@@ -323,6 +346,14 @@ export async function enrichVocabularyCatalogWithAI(): Promise<CatalogEnrichment
         relations: word.relations ?? []
       }))
     );
+  }
+
+  if (enrichmentBatches.length > 0) {
+    await options.onProgress?.({
+      completed: enrichmentBatches.length,
+      total: enrichmentBatches.length,
+      status: `Finished AI analysis for ${words.length} word${words.length === 1 ? "" : "s"}.`
+    });
   }
 
   const categoryBySlug = new Map(categories.map((category) => [category.slug, category]));

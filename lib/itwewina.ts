@@ -86,11 +86,12 @@ type ItwewinaTableCell = {
 };
 
 export type ItwewinaImportProgressEvent = {
-  stage: "starting" | "waiting" | "searching" | "retrying" | "complete" | "skipped";
+  stage: "starting" | "waiting" | "searching" | "retrying" | "enriching" | "finalizing" | "complete" | "skipped";
   completed: number;
   total: number;
   term?: string;
   status: string;
+  unitLabel?: string;
 };
 
 type BuildItwewinaImportBatchOptions = {
@@ -557,9 +558,48 @@ async function fetchSpeechDbAudioByLemma(lemmas: string[]) {
   return audioByLemma;
 }
 
-async function enrichEntriesWithAudio(entries: ItwewinaSearchEntry[]) {
+async function enrichEntriesWithAudio(
+  entries: ItwewinaSearchEntry[],
+  options: {
+    onProgress?: (event: { completed: number; total: number; status: string }) => Promise<void> | void;
+  } = {}
+) {
   const uniqueLemmas = uniqueBy(entries.map((entry) => entry.lemma), (lemma) => normalizeWordformKey(lemma));
-  const audioByLemma = await fetchSpeechDbAudioByLemma(uniqueLemmas);
+  const audioChunks = chunkArray(uniqueLemmas, BULK_AUDIO_CHUNK_SIZE);
+
+  if (audioChunks.length > 0) {
+    await options.onProgress?.({
+      completed: 0,
+      total: audioChunks.length,
+      status: `Looking up audio for ${uniqueLemmas.length} matched entr${uniqueLemmas.length === 1 ? "y" : "ies"}.`
+    });
+  }
+
+  const audioByLemma = new Map<string, string>();
+
+  for (const [chunkIndex, chunk] of audioChunks.entries()) {
+    await options.onProgress?.({
+      completed: chunkIndex,
+      total: audioChunks.length,
+      status: `Looking up audio batch ${chunkIndex + 1} of ${audioChunks.length}.`
+    });
+
+    const chunkAudio = await fetchSpeechDbAudioByLemma(chunk);
+
+    chunkAudio.forEach((value, key) => {
+      if (!audioByLemma.has(key)) {
+        audioByLemma.set(key, value);
+      }
+    });
+  }
+
+  if (audioChunks.length > 0) {
+    await options.onProgress?.({
+      completed: audioChunks.length,
+      total: audioChunks.length,
+      status: `Finished audio lookup for ${uniqueLemmas.length} matched entr${uniqueLemmas.length === 1 ? "y" : "ies"}.`
+    });
+  }
 
   return entries.map((entry) => ({
     ...entry,
@@ -873,11 +913,31 @@ async function enrichEntryWithWordDetails(entry: ItwewinaSearchEntry) {
   };
 }
 
-async function enrichEntriesWithWordDetails(entries: ItwewinaSearchEntry[]) {
+async function enrichEntriesWithWordDetails(
+  entries: ItwewinaSearchEntry[],
+  options: {
+    onProgress?: (event: { completed: number; total: number; term?: string; status: string }) => Promise<void> | void;
+  } = {}
+) {
   const enrichedEntries: ItwewinaSearchEntry[] = [];
   const warnings: string[] = [];
 
+  if (entries.length > 0) {
+    await options.onProgress?.({
+      completed: 0,
+      total: entries.length,
+      status: `Enriching ${entries.length} matched entr${entries.length === 1 ? "y" : "ies"} from full Itwewina pages.`
+    });
+  }
+
   for (const [index, entry] of entries.entries()) {
+    await options.onProgress?.({
+      completed: index,
+      total: entries.length,
+      term: entry.lemma,
+      status: `Enriching "${entry.lemma}" from its full Itwewina page (${index + 1} of ${entries.length}).`
+    });
+
     if (index > 0) {
       await sleep(DETAIL_REQUEST_INTERVAL_MS);
     }
@@ -885,6 +945,14 @@ async function enrichEntriesWithWordDetails(entries: ItwewinaSearchEntry[]) {
     const enriched = await enrichEntryWithWordDetails(entry);
     enrichedEntries.push(enriched.entry);
     warnings.push(...enriched.warnings);
+  }
+
+  if (entries.length > 0) {
+    await options.onProgress?.({
+      completed: entries.length,
+      total: entries.length,
+      status: `Finished full-page enrichment for ${entries.length} matched entr${entries.length === 1 ? "y" : "ies"}.`
+    });
   }
 
   return {
@@ -1034,7 +1102,8 @@ export async function buildItwewinaImportBatch(
     stage: "starting",
     completed: 0,
     total: searchTerms.length,
-    status: `Preparing ${searchTerms.length} itwewina search term(s).`
+    status: `Preparing ${searchTerms.length} itwewina search term(s).`,
+    unitLabel: "search terms"
   });
 
   const fetchedEntries: ItwewinaSearchEntry[] = [];
@@ -1048,7 +1117,8 @@ export async function buildItwewinaImportBatch(
         completed: index,
         total: searchTerms.length,
         term,
-        status: `Waiting ${SEARCH_REQUEST_INTERVAL_MS / 1000}s before searching "${term}".`
+        status: `Waiting ${SEARCH_REQUEST_INTERVAL_MS / 1000}s before searching "${term}".`,
+        unitLabel: "search terms"
       });
       await sleep(SEARCH_REQUEST_INTERVAL_MS);
     }
@@ -1059,7 +1129,8 @@ export async function buildItwewinaImportBatch(
         completed: index,
         total: searchTerms.length,
         term,
-        status: `Searching "${term}" on itwewina.`
+        status: `Searching "${term}" on itwewina.`,
+        unitLabel: "search terms"
       });
 
       const html = await fetchItwewinaSearchHtml(term, {
@@ -1069,7 +1140,8 @@ export async function buildItwewinaImportBatch(
             completed: index,
             total: searchTerms.length,
             term,
-            status: formatRetryStatus(term, error, delayMs, nextAttempt)
+            status: formatRetryStatus(term, error, delayMs, nextAttempt),
+            unitLabel: "search terms"
           });
         }
       });
@@ -1083,7 +1155,8 @@ export async function buildItwewinaImportBatch(
         status:
           parsedEntries.length > 0
             ? `Finished "${term}" with ${parsedEntries.length} importable match(es).`
-            : `Finished "${term}" with no importable matches.`
+            : `Finished "${term}" with no importable matches.`,
+        unitLabel: "search terms"
       });
     } catch (error) {
       if (error instanceof ItwewinaSearchError) {
@@ -1095,7 +1168,8 @@ export async function buildItwewinaImportBatch(
           completed: index + 1,
           total: searchTerms.length,
           term,
-          status: warning
+          status: warning,
+          unitLabel: "search terms"
         });
         continue;
       }
@@ -1115,19 +1189,31 @@ export async function buildItwewinaImportBatch(
 
   const mergedEntries = mergeEntries(fetchedEntries);
 
-  if (mergedEntries.length > 0) {
-    await reportProgress(options, {
-      stage: "complete",
-      completed: searchTerms.length,
-      total: searchTerms.length,
-      status: "Enriching matched entries from full Itwêwina pages."
-    });
-  }
-
-  const detailedEntries = await enrichEntriesWithWordDetails(mergedEntries);
+  const detailedEntries = await enrichEntriesWithWordDetails(mergedEntries, {
+    onProgress: async (event) => {
+      await reportProgress(options, {
+        stage: "enriching",
+        completed: event.completed,
+        total: event.total,
+        term: event.term,
+        status: event.status,
+        unitLabel: "matched entries"
+      });
+    }
+  });
   warnings.push(...detailedEntries.warnings);
 
-  const entries = await enrichEntriesWithAudio(detailedEntries.entries);
+  const entries = await enrichEntriesWithAudio(detailedEntries.entries, {
+    onProgress: async (event) => {
+      await reportProgress(options, {
+        stage: "finalizing",
+        completed: event.completed,
+        total: event.total,
+        status: event.status,
+        unitLabel: "audio batches"
+      });
+    }
+  });
 
   return {
     queryCount: searchTerms.length,

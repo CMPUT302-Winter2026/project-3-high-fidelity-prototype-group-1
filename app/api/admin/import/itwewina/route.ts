@@ -7,6 +7,10 @@ import { enrichVocabularyCatalogWithAI } from "@/lib/ai";
 import { importWords } from "@/lib/importers";
 import { buildItwewinaImportBatch, type ItwewinaImportProgressEvent } from "@/lib/itwewina";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 3600;
+
 const itwewinaImportRequestSchema = z.object({
   text: z.string().min(1, "Import text is required.")
 });
@@ -64,10 +68,11 @@ export async function POST(request: NextRequest) {
 
           send({
             type: "progress",
-            stage: "complete",
-            completed: parsed.queryCount,
-            total: parsed.queryCount,
-            status: "Saving imported words to the database."
+            stage: "finalizing",
+            completed: parsed.words.length,
+            total: parsed.words.length,
+            status: "Saving imported words to the database.",
+            unitLabel: "matched entries"
           });
 
           const result = await importWords(parsed.words);
@@ -76,14 +81,26 @@ export async function POST(request: NextRequest) {
 
           send({
             type: "progress",
-            stage: "complete",
-            completed: parsed.queryCount,
-            total: parsed.queryCount,
-            status: "Imported entries saved. Running AI categorization and relation mapping."
+            stage: "finalizing",
+            completed: 0,
+            total: 0,
+            status: "Imported entries saved. Running AI categorization and relation mapping.",
+            unitLabel: "AI batches"
           });
 
           try {
-            ai = await enrichVocabularyCatalogWithAI();
+            ai = await enrichVocabularyCatalogWithAI({
+              onProgress(event) {
+                send({
+                  type: "progress",
+                  stage: "finalizing",
+                  completed: event.completed,
+                  total: event.total,
+                  status: event.status,
+                  unitLabel: "AI batches"
+                });
+              }
+            });
 
             if (ai.warning) {
               warnings.push(ai.warning);
@@ -118,7 +135,8 @@ export async function POST(request: NextRequest) {
     return new Response(stream, {
       headers: {
         "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no"
       }
     });
   } catch (error) {

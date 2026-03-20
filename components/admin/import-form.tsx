@@ -6,7 +6,15 @@ import { useRouter } from "next/navigation";
 
 import { IMPORT_CSV_COLUMNS, IMPORT_ITWEWINA_EXAMPLE, IMPORT_JSON_EXAMPLE } from "@/lib/constants";
 
-type ItwewinaProgressStage = "starting" | "waiting" | "searching" | "retrying" | "complete" | "skipped";
+type ItwewinaProgressStage =
+  | "starting"
+  | "waiting"
+  | "searching"
+  | "retrying"
+  | "enriching"
+  | "finalizing"
+  | "complete"
+  | "skipped";
 
 type ItwewinaProgressState = {
   stage: ItwewinaProgressStage;
@@ -14,6 +22,7 @@ type ItwewinaProgressState = {
   total: number;
   term?: string;
   status: string;
+  unitLabel?: string;
 };
 
 type ItwewinaImportProgressEvent = {
@@ -23,6 +32,7 @@ type ItwewinaImportProgressEvent = {
   total: number;
   term?: string;
   status: string;
+  unitLabel?: string;
 };
 
 type ItwewinaImportResultEvent = {
@@ -94,10 +104,16 @@ function buildProgressPercent(progress: ItwewinaProgressState) {
     return 0;
   }
 
-  const inFlightStages = new Set<ItwewinaProgressStage>(["waiting", "searching", "retrying"]);
+  const inFlightStages = new Set<ItwewinaProgressStage>(["waiting", "searching", "retrying", "enriching", "finalizing"]);
   const inFlightOffset = progress.completed < progress.total && inFlightStages.has(progress.stage) ? 0.5 : 0;
 
-  return Math.min(100, Math.round(((progress.completed + inFlightOffset) / progress.total) * 100));
+  const percent = Math.round(((progress.completed + inFlightOffset) / progress.total) * 100);
+
+  if (progress.completed < progress.total) {
+    return Math.min(99, percent);
+  }
+
+  return Math.min(100, percent);
 }
 
 async function readItwewinaImportStream(
@@ -113,32 +129,40 @@ async function readItwewinaImportStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
-    let newlineIndex = buffer.indexOf("\n");
+      let newlineIndex = buffer.indexOf("\n");
 
-    while (newlineIndex >= 0) {
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
 
-      if (line) {
-        onEvent(JSON.parse(line) as ItwewinaImportStreamEvent);
+        if (line) {
+          onEvent(JSON.parse(line) as ItwewinaImportStreamEvent);
+        }
+
+        newlineIndex = buffer.indexOf("\n");
       }
 
-      newlineIndex = buffer.indexOf("\n");
+      if (done) {
+        break;
+      }
     }
 
-    if (done) {
-      break;
+    const trailingLine = buffer.trim();
+
+    if (trailingLine) {
+      onEvent(JSON.parse(trailingLine) as ItwewinaImportStreamEvent);
     }
-  }
-
-  const trailingLine = buffer.trim();
-
-  if (trailingLine) {
-    onEvent(JSON.parse(trailingLine) as ItwewinaImportStreamEvent);
+  } catch (error) {
+    throw new Error(
+      `The import stream disconnected before a final result was received. ${
+        error instanceof Error && error.message ? `Last browser error: ${error.message}. ` : ""
+      }Refresh the admin word list to confirm whether the import still finished on the server.`
+    );
   }
 }
 
@@ -205,7 +229,8 @@ export function ImportForm() {
             completed: event.completed,
             total: event.total,
             term: event.term,
-            status: event.status
+            status: event.status,
+            unitLabel: event.unitLabel
           });
           return;
         }
@@ -225,7 +250,8 @@ export function ImportForm() {
       stage: "complete",
       completed: result.queryCount,
       total: result.queryCount,
-      status: "Import complete."
+      status: "Import complete.",
+      unitLabel: "search terms"
     });
     setMessage(
       buildImportMessage({
@@ -249,7 +275,8 @@ export function ImportForm() {
             stage: "starting",
             completed: 0,
             total: 0,
-            status: "Preparing itwewina import."
+            status: "Preparing itwewina import.",
+            unitLabel: "search terms"
           }
         : null
     );
@@ -320,13 +347,15 @@ export function ImportForm() {
                 <p className="section-label">Import progress</p>
                 <p className="mt-2 text-lg text-slate-900">{progress.status}</p>
                 <p className="mt-1 text-sm text-slate-600">
-                  {progress.term ? `Current word: ${progress.term}` : "Current word: preparing import"}
+                  {progress.term ? `Current word: ${progress.term}` : "Current step: background processing"}
                 </p>
               </div>
               <div className="text-left md:text-right">
                 <p className="text-2xl font-semibold text-slate-900">{progressPercent}%</p>
                 <p className="text-sm text-slate-500">
-                  {progress.total > 0 ? `${progress.completed} of ${progress.total} terms processed` : "Waiting to start"}
+                  {progress.total > 0
+                    ? `${progress.completed} of ${progress.total} ${progress.unitLabel ?? "items"} processed`
+                    : "Waiting to start"}
                 </p>
               </div>
             </div>
@@ -366,7 +395,15 @@ export function ImportForm() {
                 return;
               }
 
-              file.text().then((value) => setText(value));
+              file
+                .text()
+                .then((value) => {
+                  setError("");
+                  setText(value);
+                })
+                .catch(() => {
+                  setError("Unable to read the selected file. Save it as UTF-8 text or paste the contents manually.");
+                });
             }}
           />
         </label>
