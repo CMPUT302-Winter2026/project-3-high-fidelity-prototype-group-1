@@ -1,4 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+
+import { PrismaClient } from "@/generated/prisma/client";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -43,6 +45,23 @@ function validateDatabaseUrl() {
   }
 }
 
+function createPrismaClient() {
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is not set. Configure it before running database queries.");
+  }
+
+  const adapter = new PrismaPg({
+    connectionString: databaseUrl
+  });
+
+  return new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
+  });
+}
+
 function shouldValidateDatabaseUrl() {
   return (
     process.env.NEXT_PHASE !== "phase-production-build" &&
@@ -54,12 +73,26 @@ if (shouldValidateDatabaseUrl()) {
   validateDatabaseUrl();
 }
 
-export const prisma =
-  globalThis.prismaGlobal ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
-  });
+function getPrismaClient() {
+  if (globalThis.prismaGlobal) {
+    return globalThis.prismaGlobal;
+  }
 
-if (process.env.NODE_ENV !== "production") {
-  globalThis.prismaGlobal = prisma;
+  const client = createPrismaClient();
+
+  if (process.env.NODE_ENV !== "production") {
+    globalThis.prismaGlobal = client;
+  }
+
+  return client;
 }
+
+// Delay adapter creation so build-time imports do not require a live DATABASE_URL.
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, property) {
+    const client = getPrismaClient();
+    const value = Reflect.get(client, property, client);
+
+    return typeof value === "function" ? value.bind(client) : value;
+  }
+});

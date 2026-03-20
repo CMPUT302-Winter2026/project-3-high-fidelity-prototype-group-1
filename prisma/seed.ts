@@ -1,6 +1,25 @@
-import { PrismaClient, type RelationType } from "@prisma/client";
+import { existsSync } from "node:fs";
+import process from "node:process";
 
-const prisma = new PrismaClient();
+import { PrismaPg } from "@prisma/adapter-pg";
+
+import { PrismaClient, type RelationType } from "../generated/prisma/client";
+
+if (existsSync(".env")) {
+  process.loadEnvFile?.(".env");
+}
+
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is not set. Configure it before seeding.");
+}
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({
+    connectionString: databaseUrl
+  })
+});
 
 type SeedMeaning = {
   gloss: string;

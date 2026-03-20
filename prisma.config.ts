@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import process from "node:process";
-import { defineConfig } from "prisma/config";
+import { defineConfig, env } from "prisma/config";
 
 if (existsSync(".env")) {
   process.loadEnvFile?.(".env");
@@ -9,6 +9,10 @@ if (existsSync(".env")) {
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
+    path: "prisma/migrations",
     seed: "tsx prisma/seed.ts"
+  },
+  datasource: {
+    url: env("DATABASE_URL")
   }
 });

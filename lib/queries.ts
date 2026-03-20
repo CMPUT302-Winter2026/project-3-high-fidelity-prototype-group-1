@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import { unstable_noStore as noStore } from "next/cache";
 
 import { HOME_CATEGORY_SLUGS, RELATION_TYPE_VALUES } from "@/lib/constants";
@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getInverseRelationType, uniqueBy } from "@/lib/utils";
 import { createEmptyWordPayload } from "@/lib/word-service";
 
-const wordCardSelect = Prisma.validator<Prisma.WordSelect>()({
+const wordCardSelect = {
   id: true,
   slug: true,
   lemma: true,
@@ -26,7 +26,7 @@ const wordCardSelect = Prisma.validator<Prisma.WordSelect>()({
       }
     }
   }
-});
+} satisfies Prisma.WordSelect;
 
 export async function getHomePageData() {
   noStore();
