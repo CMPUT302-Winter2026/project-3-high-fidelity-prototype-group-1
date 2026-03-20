@@ -32,7 +32,7 @@ export function BottomNav() {
         <span
           aria-hidden
           className={cn(
-            "pointer-events-none absolute left-2 top-2 flex h-11 items-center justify-center transition-[transform,opacity] duration-300 ease-out",
+            "pointer-events-none absolute inset-y-2 left-2 transition-[transform,opacity] duration-300 ease-out",
             activeIndex === -1 ? "opacity-0" : "opacity-100"
           )}
           style={{
@@ -40,7 +40,7 @@ export function BottomNav() {
             transform: `translateX(${Math.max(activeIndex, 0) * 100}%)`
           }}
         >
-          <span className="h-11 w-11 rounded-full bg-moss-700 shadow-card" />
+          <span className="block h-full rounded-full bg-moss-700 shadow-card" />
         </span>
         {navItems.map((item, index) => {
           const Icon = item.icon;
@@ -52,7 +52,7 @@ export function BottomNav() {
               href={item.href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "group relative z-10 flex min-h-[4.5rem] min-w-16 flex-col items-center justify-center gap-1 px-2 py-1.5 text-[0.72rem] font-medium transition"
+                "group relative z-10 flex min-h-[4.5rem] min-w-16 flex-col items-center justify-center gap-1 rounded-full px-2 py-1.5 text-[0.72rem] font-medium transition"
               )}
             >
               <span
@@ -66,7 +66,7 @@ export function BottomNav() {
               <span
                 className={cn(
                   "transition-colors duration-300",
-                  active ? "text-moss-900" : "text-slate-500 group-hover:text-moss-800"
+                  active ? "text-white" : "text-slate-500 group-hover:text-moss-800"
                 )}
               >
                 {item.label}
