@@ -23,6 +23,18 @@ enum MediaKind {
   image
 }
 
+enum EnrichmentRunKind {
+  ai
+  itwewina
+}
+
+enum EnrichmentRunStatus {
+  queued
+  running
+  completed
+  failed
+}
+
 model Word {
   id                   String            @id @default(cuid())
   lemma                String
@@ -153,4 +165,26 @@ model MediaAsset {
   word      Word      @relation(fields: [wordId], references: [id], onDelete: Cascade)
 
   @@index([wordId])
+}
+
+model EnrichmentRun {
+  id            String              @id @default(cuid())
+  kind          EnrichmentRunKind
+  status        EnrichmentRunStatus @default(queued)
+  stage         String?
+  completed     Int                 @default(0)
+  total         Int                 @default(0)
+  term          String?
+  statusMessage String?
+  unitLabel     String?
+  warnings      Json?
+  result        Json?
+  error         String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  @@index([status, createdAt])
+  @@index([kind, createdAt])
 }

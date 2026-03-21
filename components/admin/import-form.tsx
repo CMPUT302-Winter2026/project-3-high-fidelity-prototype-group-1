@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -52,25 +52,8 @@ type ItwewinaImportStreamEvent =
   | ItwewinaImportResultEvent
   | ItwewinaImportErrorEvent;
 
-type AiEnrichmentResultEvent = {
-  type: "result";
-  summary: AiImportSummary;
-  warnings?: string[];
-};
-
-type ItwewinaPageEnrichmentResultEvent = {
-  type: "result";
-  processedCount: number;
-  warnings?: string[];
-};
-
 type EnrichmentMode = "ai" | "itwewina";
-
-type EnrichmentStreamEvent =
-  | ItwewinaImportProgressEvent
-  | AiEnrichmentResultEvent
-  | ItwewinaPageEnrichmentResultEvent
-  | ItwewinaImportErrorEvent;
+type EnrichmentRunStatus = "queued" | "running" | "completed" | "failed";
 
 type AiImportSummary = {
   skipped: boolean;
@@ -80,6 +63,21 @@ type AiImportSummary = {
   addedBeginnerExplanations: number;
   addedExpertExplanations: number;
   warning?: string;
+};
+
+type PersistedEnrichmentRun = {
+  id: string;
+  mode: EnrichmentMode;
+  status: EnrichmentRunStatus;
+  progress: ItwewinaProgressState;
+  warnings: string[];
+  error?: string;
+  summary?: AiImportSummary;
+  processedCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
 };
 
 function buildImportMessage({
@@ -199,9 +197,99 @@ export function ImportForm() {
   const [enrichmentProgress, setEnrichmentProgress] = useState<ItwewinaProgressState | null>(null);
   const [activeEnrichment, setActiveEnrichment] = useState<EnrichmentMode | null>(null);
   const router = useRouter();
+  const lastObservedEnrichmentRunRef = useRef<{ id: string; status: EnrichmentRunStatus } | null>(null);
   const isItwewinaMode = mode === "itwewina";
   const progressPercent = progress ? buildProgressPercent(progress) : 0;
   const enrichmentProgressPercent = enrichmentProgress ? buildProgressPercent(enrichmentProgress) : 0;
+
+  const syncEnrichmentRun = useCallback((run: PersistedEnrichmentRun | null) => {
+    if (!run) {
+      setIsEnrichmentRunning(false);
+      setActiveEnrichment(null);
+      setEnrichmentProgress(null);
+      setEnrichmentMessage("");
+      setEnrichmentWarning("");
+      setEnrichmentError("");
+      return;
+    }
+
+    const previousRun = lastObservedEnrichmentRunRef.current;
+    const isCurrentRunActive = run.status === "queued" || run.status === "running";
+    const didRunJustFinish =
+      previousRun &&
+      previousRun.id === run.id &&
+      (previousRun.status === "queued" || previousRun.status === "running") &&
+      !isCurrentRunActive;
+
+    setActiveEnrichment(run.mode);
+    setIsEnrichmentRunning(isCurrentRunActive);
+    setEnrichmentProgress(run.progress);
+    setEnrichmentWarning(run.warnings.join("\n"));
+
+    if (run.status === "completed") {
+      setEnrichmentError("");
+      setEnrichmentMessage(
+        run.mode === "ai"
+          ? buildAiEnrichmentMessage(
+              run.summary ?? {
+                skipped: false,
+                processedWords: run.progress.completed,
+                addedCategoryAssignments: 0,
+                addedRelations: 0,
+                addedBeginnerExplanations: 0,
+                addedExpertExplanations: 0
+              }
+            )
+          : buildItwewinaPageEnrichmentMessage(run.processedCount ?? 0, run.warnings)
+      );
+    } else {
+      setEnrichmentMessage("");
+      setEnrichmentError(run.status === "failed" ? run.error ?? "Enrichment failed." : "");
+    }
+
+    lastObservedEnrichmentRunRef.current = {
+      id: run.id,
+      status: run.status
+    };
+
+    if (didRunJustFinish) {
+      router.refresh();
+    }
+  }, [router]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function pollEnrichmentStatus() {
+      try {
+        const response = await fetch("/api/admin/enrich/status", {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json().catch(() => null)) as { run?: PersistedEnrichmentRun | null } | null;
+
+        if (!cancelled) {
+          syncEnrichmentRun(payload?.run ?? null);
+        }
+      } catch {
+        // Keep the last known progress in the UI and try again on the next poll.
+      }
+    }
+
+    void pollEnrichmentStatus();
+    const intervalId = window.setInterval(() => {
+      void pollEnrichmentStatus();
+    }, 4_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [syncEnrichmentRun]);
 
   async function runStandardImport() {
     const response = await fetch("/api/admin/import", {
@@ -287,102 +375,33 @@ export function ImportForm() {
     router.refresh();
   }
 
-  async function runAiEnrichment() {
-    const response = await fetch("/api/admin/enrich/ai", {
-      method: "POST"
-    });
+  async function runEnrichmentRequest(mode: EnrichmentMode) {
+    const endpoint = mode === "ai" ? "/api/admin/enrich/ai" : "/api/admin/enrich/itwewina";
+    const startResponse = await fetch(endpoint, { method: "POST" });
 
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!startResponse.ok) {
+      const payload = (await startResponse.json().catch(() => null)) as { error?: string } | null;
       throw new Error(payload?.error ?? "Enrichment failed.");
     }
 
-    const result = await new Promise<AiEnrichmentResultEvent>((resolve, reject) => {
-      readJsonLineStream<EnrichmentStreamEvent>(response, (event) => {
-        if (event.type === "progress") {
-          setEnrichmentProgress({
-            stage: event.stage,
-            completed: event.completed,
-            total: event.total,
-            term: event.term,
-            status: event.status,
-            unitLabel: event.unitLabel
-          });
-          return;
+    const payload = (await startResponse.json().catch(() => null)) as
+      | {
+          run?: PersistedEnrichmentRun;
+          started?: boolean;
+          notice?: string;
+          error?: string;
         }
+      | null;
 
-        if ("summary" in event) {
-          resolve(event);
-          return;
-        }
-
-        if (event.type === "error") {
-          reject(new Error(event.error));
-        }
-      }).catch(reject);
-    });
-
-    const warnings = result.warnings ?? [];
-
-    setEnrichmentProgress({
-      stage: "complete",
-      completed: result.summary.processedWords,
-      total: result.summary.processedWords,
-      status: "AI enrichment complete.",
-      unitLabel: "words"
-    });
-    setEnrichmentMessage(buildAiEnrichmentMessage(result.summary));
-    setEnrichmentWarning(warnings.join("\n"));
-    router.refresh();
-  }
-
-  async function runItwewinaPageEnrichment() {
-    const response = await fetch("/api/admin/enrich/itwewina", {
-      method: "POST"
-    });
-
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!payload?.run) {
       throw new Error(payload?.error ?? "Enrichment failed.");
     }
 
-    const result = await new Promise<ItwewinaPageEnrichmentResultEvent>((resolve, reject) => {
-      readJsonLineStream<EnrichmentStreamEvent>(response, (event) => {
-        if (event.type === "progress") {
-          setEnrichmentProgress({
-            stage: event.stage,
-            completed: event.completed,
-            total: event.total,
-            term: event.term,
-            status: event.status,
-            unitLabel: event.unitLabel
-          });
-          return;
-        }
+    syncEnrichmentRun(payload.run);
 
-        if ("processedCount" in event) {
-          resolve(event);
-          return;
-        }
-
-        if (event.type === "error") {
-          reject(new Error(event.error));
-        }
-      }).catch(reject);
-    });
-
-    const warnings = result.warnings ?? [];
-
-    setEnrichmentProgress({
-      stage: "complete",
-      completed: result.processedCount,
-      total: result.processedCount,
-      status: "Itwewina page enrichment complete.",
-      unitLabel: "imported records"
-    });
-    setEnrichmentMessage(buildItwewinaPageEnrichmentMessage(result.processedCount, warnings));
-    setEnrichmentWarning(warnings.join("\n"));
-    router.refresh();
+    if (payload.notice) {
+      setEnrichmentWarning([payload.run.warnings.join("\n"), payload.notice].filter(Boolean).join("\n"));
+    }
   }
 
   async function handleImport() {
@@ -430,14 +449,9 @@ export function ImportForm() {
     setIsEnrichmentRunning(true);
 
     try {
-      if (mode === "ai") {
-        await runAiEnrichment();
-      } else {
-        await runItwewinaPageEnrichment();
-      }
+      await runEnrichmentRequest(mode);
     } catch (enrichmentRunError) {
       setEnrichmentError(enrichmentRunError instanceof Error ? enrichmentRunError.message : "Enrichment failed.");
-    } finally {
       setIsEnrichmentRunning(false);
     }
   }
@@ -573,7 +587,8 @@ export function ImportForm() {
         <p className="mt-2 text-sm leading-6 text-slate-600">
           Run enrichment after an import. <code>AI</code> adds explanations, categories, and relations across the local
           catalog. <code>Itwêwina pages</code> revisits imported Itwêwina-backed records to pull paradigms, related
-          references, and audio.
+          references, and audio. These runs now continue on the server even if this tab disconnects, and the panel will
+          reload the latest status when you open it again.
         </p>
 
         <div className="mt-4 flex flex-wrap gap-2">

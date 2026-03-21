@@ -1,21 +1,24 @@
 import { type NextRequest } from "next/server";
 
 import { hasAdminAccessFromRequest, unauthorizedAdminResponse } from "@/lib/admin";
-import { startEnrichmentRun } from "@/lib/enrichment-runs";
+import { getLatestEnrichmentRun } from "@/lib/enrichment-runs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   if (!hasAdminAccessFromRequest(request)) {
     return unauthorizedAdminResponse();
   }
 
-  const payload = await startEnrichmentRun("itwewina");
+  const run = await getLatestEnrichmentRun();
 
-  return Response.json(payload, {
-    headers: {
-      "Cache-Control": "no-store"
+  return Response.json(
+    { run },
+    {
+      headers: {
+        "Cache-Control": "no-store"
+      }
     }
-  });
+  );
 }
