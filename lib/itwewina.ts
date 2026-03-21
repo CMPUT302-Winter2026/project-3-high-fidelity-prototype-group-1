@@ -41,6 +41,8 @@ const RETRYABLE_SEARCH_STATUS_CODES = new Set([429, 502, 503, 504]);
 const PARADIGM_SECTION_PATTERN = /<tbody>([\s\S]*?)<\/tbody>/g;
 const TABLE_ROW_PATTERN = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
 const TABLE_CELL_PATTERN = /<(th|td)\b([^>]*)>([\s\S]*?)<\/\1>/g;
+// Keep page enrichment bounded so large imports do not retain every parsed table in memory at once.
+const ITWEWINA_PAGE_ENRICHMENT_BATCH_SIZE = 100;
 
 type SpeechDbVariant = (typeof SPEECH_DB_VARIANTS)[number];
 type ItwewinaLabelMode = (typeof ITWEWINA_LABEL_MODES)[number];
@@ -121,6 +123,12 @@ const itwewinaPageEnrichmentWordSelect = {
     }
   }
 } satisfies Prisma.WordSelect;
+
+const itwewinaImportedWordWhere = {
+  source: {
+    contains: ITWEWINA_BASE_URL
+  }
+} satisfies Prisma.WordWhereInput;
 
 type ItwewinaPageEnrichmentWord = Prisma.WordGetPayload<{
   select: typeof itwewinaPageEnrichmentWordSelect;
@@ -1222,33 +1230,50 @@ export async function buildItwewinaImportBatch(
   };
 }
 
+async function saveEnrichedItwewinaWord(wordId: string, entry: ItwewinaSearchEntry) {
+  await prisma.word.update({
+    where: { id: wordId },
+    data: {
+      linguisticClass: entry.linguisticClass ?? null,
+      rootStem: entry.rootStem ?? null,
+      audioUrl: entry.audioUrl ?? null,
+      itwewinaMetadata: entry.itwewinaMetadata
+        ? (entry.itwewinaMetadata as Prisma.InputJsonValue)
+        : Prisma.JsonNull,
+      morphologyTables: {
+        deleteMany: {},
+        ...(entry.morphologyTables.length > 0
+          ? {
+              create: entry.morphologyTables.map((table) => ({
+                title: table.title,
+                description: table.description,
+                isPlainEnglish: table.isPlainEnglish,
+                sortOrder: table.sortOrder,
+                entries: {
+                  create: table.entries.map((morphologyEntry) => ({
+                    rowLabel: morphologyEntry.rowLabel,
+                    columnLabel: morphologyEntry.columnLabel,
+                    plainLabel: morphologyEntry.plainLabel,
+                    value: morphologyEntry.value,
+                    sortOrder: morphologyEntry.sortOrder
+                  }))
+                }
+              }))
+            }
+          : {})
+      }
+    }
+  });
+}
+
 export async function enrichImportedWordsWithItwewinaPages(
   options: BuildItwewinaImportBatchOptions = {}
 ): Promise<ItwewinaPageEnrichmentResult> {
-  const storedWords = await prisma.word.findMany({
-    where: {
-      source: {
-        contains: ITWEWINA_BASE_URL
-      }
-    },
-    orderBy: [{ lemma: "asc" }],
-    select: itwewinaPageEnrichmentWordSelect
+  const totalTargets = await prisma.word.count({
+    where: itwewinaImportedWordWhere
   });
 
-  const targets = storedWords
-    .map((word) => {
-      const entry = mapStoredWordToSearchEntry(word);
-
-      return entry
-        ? {
-            wordId: word.id,
-            entry
-          }
-        : null;
-    })
-    .filter((target): target is { wordId: string; entry: ItwewinaSearchEntry } => Boolean(target));
-
-  if (targets.length === 0) {
+  if (totalTargets === 0) {
     return {
       processedCount: 0,
       warnings: []
@@ -1258,83 +1283,118 @@ export async function enrichImportedWordsWithItwewinaPages(
   await reportProgress(options, {
     stage: "starting",
     completed: 0,
-    total: targets.length,
-    status: `Preparing ${targets.length} imported Itwewina record(s) for page enrichment.`,
+    total: totalTargets,
+    status: `Preparing ${totalTargets} imported Itwewina record(s) for page enrichment.`,
     unitLabel: "imported records"
   });
 
-  const detailedEntries = await enrichEntriesWithWordDetails(
-    targets.map((target) => target.entry),
-    {
+  const warnings: string[] = [];
+  let processedCount = 0;
+  let cursor: string | undefined;
+
+  while (processedCount < totalTargets) {
+    const storedWords = await prisma.word.findMany({
+      where: itwewinaImportedWordWhere,
+      orderBy: [{ id: "asc" }],
+      take: ITWEWINA_PAGE_ENRICHMENT_BATCH_SIZE,
+      ...(cursor
+        ? {
+            cursor: { id: cursor },
+            skip: 1
+          }
+        : {}),
+      select: itwewinaPageEnrichmentWordSelect
+    });
+
+    if (storedWords.length === 0) {
+      break;
+    }
+
+    cursor = storedWords.at(-1)?.id;
+
+    const targets = storedWords
+      .map((word) => {
+        const entry = mapStoredWordToSearchEntry(word);
+
+        return entry
+          ? {
+              wordId: word.id,
+              entry
+            }
+          : null;
+      })
+      .filter((target): target is { wordId: string; entry: ItwewinaSearchEntry } => Boolean(target));
+
+    if (targets.length === 0) {
+      continue;
+    }
+
+    const batchStart = processedCount;
+
+    const detailedEntries = await enrichEntriesWithWordDetails(
+      targets.map((target) => target.entry),
+      {
+        onProgress: async (event) => {
+          await reportProgress(options, {
+            stage: "enriching",
+            completed: Math.min(totalTargets, batchStart + event.completed),
+            total: totalTargets,
+            term: event.term,
+            status: event.status,
+            unitLabel: "imported records"
+          });
+        }
+      }
+    );
+
+    warnings.push(...detailedEntries.warnings);
+
+    const entriesWithAudio = await enrichEntriesWithAudio(detailedEntries.entries, {
       onProgress: async (event) => {
+        const scaledCompleted =
+          event.total > 0 ? Math.round((event.completed / event.total) * targets.length) : targets.length;
+
         await reportProgress(options, {
-          stage: "enriching",
-          completed: event.completed,
-          total: event.total,
-          term: event.term,
+          stage: "finalizing",
+          completed: Math.min(totalTargets, batchStart + scaledCompleted),
+          total: totalTargets,
           status: event.status,
           unitLabel: "imported records"
         });
       }
-    }
-  );
+    });
 
-  const entriesWithAudio = await enrichEntriesWithAudio(detailedEntries.entries, {
-    onProgress: async (event) => {
-      await reportProgress(options, {
-        stage: "finalizing",
-        completed: event.completed,
-        total: event.total,
-        status: event.status,
-        unitLabel: "audio batches"
-      });
-    }
-  });
+    await reportProgress(options, {
+      stage: "finalizing",
+      completed: batchStart,
+      total: totalTargets,
+      status: `Saving enriched records ${batchStart + 1} to ${Math.min(totalTargets, batchStart + targets.length)}.`,
+      unitLabel: "imported records"
+    });
 
-  for (const [index, target] of targets.entries()) {
-    const entry = entriesWithAudio[index];
+    for (const [index, target] of targets.entries()) {
+      const entry = entriesWithAudio[index];
 
-    if (!entry) {
-      continue;
-    }
-
-    await prisma.word.update({
-      where: { id: target.wordId },
-      data: {
-        linguisticClass: entry.linguisticClass ?? null,
-        rootStem: entry.rootStem ?? null,
-        audioUrl: entry.audioUrl ?? null,
-        itwewinaMetadata: entry.itwewinaMetadata
-          ? (entry.itwewinaMetadata as Prisma.InputJsonValue)
-          : Prisma.JsonNull,
-        morphologyTables: {
-          deleteMany: {},
-          ...(entry.morphologyTables.length > 0
-            ? {
-                create: entry.morphologyTables.map((table) => ({
-                  title: table.title,
-                  description: table.description,
-                  isPlainEnglish: table.isPlainEnglish,
-                  sortOrder: table.sortOrder,
-                  entries: {
-                    create: table.entries.map((morphologyEntry) => ({
-                      rowLabel: morphologyEntry.rowLabel,
-                      columnLabel: morphologyEntry.columnLabel,
-                      plainLabel: morphologyEntry.plainLabel,
-                      value: morphologyEntry.value,
-                      sortOrder: morphologyEntry.sortOrder
-                    }))
-                  }
-                }))
-              }
-            : {})
-        }
+      if (!entry) {
+        continue;
       }
+
+      await saveEnrichedItwewinaWord(target.wordId, entry);
+    }
+
+    processedCount = Math.min(totalTargets, batchStart + targets.length);
+
+    await reportProgress(options, {
+      stage: "finalizing",
+      completed: processedCount,
+      total: totalTargets,
+      status: `Saved ${processedCount} of ${totalTargets} enriched imported record(s).`,
+      unitLabel: "imported records"
     });
   }
 
   return {
-    processedCount: targets.length,
-    warnings: detailedEntries.warnings
+    processedCount,
+    warnings
   };
 }
