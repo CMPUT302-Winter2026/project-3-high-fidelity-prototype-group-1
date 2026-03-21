@@ -46,6 +46,7 @@ declare global {
 }
 
 const ACTIVE_RUN_STATUSES = [EnrichmentRunStatus.queued, EnrichmentRunStatus.running] as const;
+const STOPPED_ENRICHMENT_MESSAGE = "Enrichment stopped from dashboard.";
 const VALID_PROGRESS_STAGES = new Set<ItwewinaImportProgressEvent["stage"]>([
   "starting",
   "waiting",
@@ -60,6 +61,13 @@ const enrichmentRunTasks = globalThis.enrichmentRunTasks ?? new Map<string, Prom
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.enrichmentRunTasks = enrichmentRunTasks;
+}
+
+class EnrichmentRunStoppedError extends Error {
+  constructor(message = STOPPED_ENRICHMENT_MESSAGE) {
+    super(message);
+    this.name = "EnrichmentRunStoppedError";
+  }
 }
 
 function modeToKind(mode: EnrichmentMode) {
@@ -162,9 +170,27 @@ async function getEnrichmentRunById(runId: string) {
   });
 }
 
-async function updateRunProgress(runId: string, progress: EnrichmentRunProgressState) {
-  await prisma.enrichmentRun.update({
+async function assertRunIsActive(runId: string) {
+  const run = await prisma.enrichmentRun.findUnique({
     where: { id: runId },
+    select: {
+      status: true
+    }
+  });
+
+  if (!run || !isActiveRunStatus(run.status)) {
+    throw new EnrichmentRunStoppedError();
+  }
+}
+
+async function updateRunProgress(runId: string, progress: EnrichmentRunProgressState) {
+  const result = await prisma.enrichmentRun.updateMany({
+    where: {
+      id: runId,
+      status: {
+        in: [...ACTIVE_RUN_STATUSES]
+      }
+    },
     data: {
       status: EnrichmentRunStatus.running,
       stage: progress.stage,
@@ -177,6 +203,10 @@ async function updateRunProgress(runId: string, progress: EnrichmentRunProgressS
       finishedAt: null
     }
   });
+
+  if (result.count === 0) {
+    throw new EnrichmentRunStoppedError();
+  }
 }
 
 async function completeAiRun(runId: string) {
@@ -198,6 +228,9 @@ async function completeAiRun(runId: string) {
         status: event.status,
         unitLabel: "AI batches"
       });
+    },
+    shouldContinue() {
+      return assertRunIsActive(runId);
     }
   });
 
@@ -205,8 +238,13 @@ async function completeAiRun(runId: string) {
     warnings.push(summary.warning);
   }
 
-  await prisma.enrichmentRun.update({
-    where: { id: runId },
+  const result = await prisma.enrichmentRun.updateMany({
+    where: {
+      id: runId,
+      status: {
+        in: [...ACTIVE_RUN_STATUSES]
+      }
+    },
     data: {
       status: EnrichmentRunStatus.completed,
       stage: summary.skipped ? "skipped" : "complete",
@@ -221,6 +259,10 @@ async function completeAiRun(runId: string) {
       finishedAt: new Date()
     }
   });
+
+  if (result.count === 0) {
+    throw new EnrichmentRunStoppedError();
+  }
 }
 
 async function completeItwewinaRun(runId: string) {
@@ -242,11 +284,19 @@ async function completeItwewinaRun(runId: string) {
         status: event.status,
         unitLabel: event.unitLabel
       });
+    },
+    shouldContinue() {
+      return assertRunIsActive(runId);
     }
   });
 
-  await prisma.enrichmentRun.update({
-    where: { id: runId },
+  const updateResult = await prisma.enrichmentRun.updateMany({
+    where: {
+      id: runId,
+      status: {
+        in: [...ACTIVE_RUN_STATUSES]
+      }
+    },
     data: {
       status: EnrichmentRunStatus.completed,
       stage: "complete",
@@ -261,6 +311,10 @@ async function completeItwewinaRun(runId: string) {
       finishedAt: new Date()
     }
   });
+
+  if (updateResult.count === 0) {
+    throw new EnrichmentRunStoppedError();
+  }
 }
 
 async function runEnrichmentTask(runId: string) {
@@ -270,8 +324,13 @@ async function runEnrichmentTask(runId: string) {
     return;
   }
 
-  await prisma.enrichmentRun.update({
-    where: { id: runId },
+  const startResult = await prisma.enrichmentRun.updateMany({
+    where: {
+      id: runId,
+      status: {
+        in: [...ACTIVE_RUN_STATUSES]
+      }
+    },
     data: {
       status: EnrichmentRunStatus.running,
       startedAt: run.startedAt ?? new Date(),
@@ -280,6 +339,10 @@ async function runEnrichmentTask(runId: string) {
     }
   });
 
+  if (startResult.count === 0) {
+    return;
+  }
+
   try {
     if (run.kind === EnrichmentRunKind.ai) {
       await completeAiRun(runId);
@@ -287,6 +350,10 @@ async function runEnrichmentTask(runId: string) {
       await completeItwewinaRun(runId);
     }
   } catch (error) {
+    if (error instanceof EnrichmentRunStoppedError) {
+      return;
+    }
+
     await prisma.enrichmentRun.update({
       where: { id: runId },
       data: {
@@ -351,6 +418,43 @@ export async function getLatestEnrichmentRun() {
   });
 
   return latestRun ? serializeRun(latestRun) : null;
+}
+
+export async function stopActiveEnrichmentRun() {
+  const activeRun = await findActiveRun();
+
+  if (!activeRun) {
+    const latestRun = await prisma.enrichmentRun.findFirst({
+      orderBy: [{ createdAt: "desc" }]
+    });
+
+    return {
+      run: latestRun ? serializeRun(latestRun) : null,
+      stopped: false,
+      notice: "No enrichment run is currently in progress."
+    };
+  }
+
+  const finishedAt = new Date();
+
+  await prisma.enrichmentRun.update({
+    where: { id: activeRun.id },
+    data: {
+      status: EnrichmentRunStatus.failed,
+      stage: "complete",
+      term: null,
+      statusMessage: STOPPED_ENRICHMENT_MESSAGE,
+      error: STOPPED_ENRICHMENT_MESSAGE,
+      finishedAt
+    }
+  });
+
+  const stoppedRun = await getEnrichmentRunById(activeRun.id);
+
+  return {
+    run: stoppedRun ? serializeRun(stoppedRun) : null,
+    stopped: true
+  };
 }
 
 export async function startEnrichmentRun(mode: EnrichmentMode) {

@@ -103,6 +103,7 @@ export type ItwewinaImportProgressEvent = {
 
 type BuildItwewinaImportBatchOptions = {
   onProgress?: (event: ItwewinaImportProgressEvent) => Promise<void> | void;
+  shouldContinue?: () => Promise<void> | void;
 };
 
 const itwewinaPageEnrichmentWordSelect = {
@@ -1293,6 +1294,8 @@ export async function enrichImportedWordsWithItwewinaPages(
   let cursor: string | undefined;
 
   while (processedCount < totalTargets) {
+    await options.shouldContinue?.();
+
     const storedWords = await prisma.word.findMany({
       where: itwewinaImportedWordWhere,
       orderBy: [{ id: "asc" }],
@@ -1363,6 +1366,8 @@ export async function enrichImportedWordsWithItwewinaPages(
         });
       }
     });
+
+    await options.shouldContinue?.();
 
     await reportProgress(options, {
       stage: "finalizing",

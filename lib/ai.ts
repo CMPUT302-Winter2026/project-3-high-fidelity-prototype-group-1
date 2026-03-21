@@ -116,6 +116,11 @@ export type CatalogEnrichmentProgressEvent = {
   status: string;
 };
 
+type CatalogEnrichmentOptions = {
+  onProgress?: (event: CatalogEnrichmentProgressEvent) => Promise<void> | void;
+  shouldContinue?: () => Promise<void> | void;
+};
+
 export type GeneratedLessonPlan = z.infer<typeof lessonPlanSchema>;
 export type GeneratedFlashcardDeck = z.infer<typeof flashcardDeckSchema>;
 export type SearchQuestionAnswerResult = z.infer<typeof searchQuestionAnswerSchema>;
@@ -677,9 +682,9 @@ async function applyCatalogEnrichmentSuggestions(params: {
   };
 }
 
-export async function enrichVocabularyCatalogWithAI(options: {
-  onProgress?: (event: CatalogEnrichmentProgressEvent) => Promise<void> | void;
-} = {}): Promise<CatalogEnrichmentResult> {
+export async function enrichVocabularyCatalogWithAI(
+  options: CatalogEnrichmentOptions = {}
+): Promise<CatalogEnrichmentResult> {
   const totalWords = await prisma.word.count();
 
   if (!isOpenAIConfigured()) {
@@ -765,6 +770,8 @@ export async function enrichVocabularyCatalogWithAI(options: {
   let cursor: string | undefined;
 
   while (processedWords < totalWords) {
+    await options.shouldContinue?.();
+
     const batch = await prisma.word.findMany({
       orderBy: [{ id: "asc" }],
       take: ENRICHMENT_BATCH_SIZE,
@@ -794,6 +801,7 @@ export async function enrichVocabularyCatalogWithAI(options: {
       catalogSummary,
       batch
     });
+    await options.shouldContinue?.();
 
     const applied = await applyCatalogEnrichmentSuggestions({
       batchWords: batch,

@@ -80,6 +80,8 @@ type PersistedEnrichmentRun = {
   finishedAt?: string;
 };
 
+const STOPPED_ENRICHMENT_MESSAGE = "Enrichment stopped from dashboard.";
+
 function buildImportMessage({
   importedCount,
   queryCount,
@@ -130,6 +132,11 @@ function buildProgressPercent(progress: ItwewinaProgressState) {
   }
 
   return Math.min(100, percent);
+}
+
+function isStoppedEnrichmentRun(run: PersistedEnrichmentRun) {
+  const combinedMessage = `${run.error ?? ""}\n${run.progress.status}`.toLowerCase();
+  return run.status === "failed" && combinedMessage.includes(STOPPED_ENRICHMENT_MESSAGE.toLowerCase());
 }
 
 async function readJsonLineStream<EventType>(
@@ -194,6 +201,7 @@ export function ImportForm() {
   const [enrichmentWarning, setEnrichmentWarning] = useState("");
   const [enrichmentError, setEnrichmentError] = useState("");
   const [isEnrichmentRunning, setIsEnrichmentRunning] = useState(false);
+  const [isStoppingEnrichment, setIsStoppingEnrichment] = useState(false);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ItwewinaProgressState | null>(null);
   const [activeEnrichment, setActiveEnrichment] = useState<EnrichmentMode | null>(null);
   const router = useRouter();
@@ -224,10 +232,12 @@ export function ImportForm() {
     setActiveEnrichment(run.mode);
     setIsEnrichmentRunning(isCurrentRunActive);
     setEnrichmentProgress(run.progress);
-    setEnrichmentWarning(run.warnings.join("\n"));
+    const warningsText = run.warnings.join("\n");
+    const stopped = isStoppedEnrichmentRun(run);
 
     if (run.status === "completed") {
       setEnrichmentError("");
+      setEnrichmentWarning(warningsText);
       setEnrichmentMessage(
         run.mode === "ai"
           ? buildAiEnrichmentMessage(
@@ -242,8 +252,13 @@ export function ImportForm() {
             )
           : buildItwewinaPageEnrichmentMessage(run.processedCount ?? 0, run.warnings)
       );
+    } else if (stopped) {
+      setEnrichmentMessage("");
+      setEnrichmentError("");
+      setEnrichmentWarning([warningsText, run.error ?? STOPPED_ENRICHMENT_MESSAGE].filter(Boolean).join("\n"));
     } else {
       setEnrichmentMessage("");
+      setEnrichmentWarning(warningsText);
       setEnrichmentError(run.status === "failed" ? run.error ?? "Enrichment failed." : "");
     }
 
@@ -404,6 +419,29 @@ export function ImportForm() {
     }
   }
 
+  async function stopEnrichmentRequest() {
+    const response = await fetch("/api/admin/enrich/stop", { method: "POST" });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          run?: PersistedEnrichmentRun | null;
+          stopped?: boolean;
+          notice?: string;
+          error?: string;
+        }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Unable to stop enrichment.");
+    }
+
+    syncEnrichmentRun(payload?.run ?? null);
+
+    if (payload?.notice) {
+      setEnrichmentWarning([payload.run?.warnings.join("\n") ?? "", payload.notice].filter(Boolean).join("\n"));
+    }
+  }
+
   async function handleImport() {
     setError("");
     setMessage("");
@@ -453,6 +491,19 @@ export function ImportForm() {
     } catch (enrichmentRunError) {
       setEnrichmentError(enrichmentRunError instanceof Error ? enrichmentRunError.message : "Enrichment failed.");
       setIsEnrichmentRunning(false);
+    }
+  }
+
+  async function handleStopEnrichment() {
+    setEnrichmentError("");
+    setIsStoppingEnrichment(true);
+
+    try {
+      await stopEnrichmentRequest();
+    } catch (stopError) {
+      setEnrichmentError(stopError instanceof Error ? stopError.message : "Unable to stop enrichment.");
+    } finally {
+      setIsStoppingEnrichment(false);
     }
   }
 
@@ -575,7 +626,7 @@ export function ImportForm() {
         <button
           type="button"
           className="tap-button-primary mt-4"
-          disabled={isRunning || isEnrichmentRunning}
+          disabled={isRunning || isEnrichmentRunning || isStoppingEnrichment}
           onClick={() => void handleImport()}
         >
           {isRunning ? "Importing..." : "Run import"}
@@ -595,7 +646,7 @@ export function ImportForm() {
           <button
             type="button"
             className="tap-button-secondary"
-            disabled={isRunning || isEnrichmentRunning}
+            disabled={isRunning || isEnrichmentRunning || isStoppingEnrichment}
             onClick={() => void handleEnrichment("ai")}
           >
             {isEnrichmentRunning && activeEnrichment === "ai" ? "Running AI..." : "Run AI enrichment"}
@@ -603,12 +654,20 @@ export function ImportForm() {
           <button
             type="button"
             className="tap-button-secondary"
-            disabled={isRunning || isEnrichmentRunning}
+            disabled={isRunning || isEnrichmentRunning || isStoppingEnrichment}
             onClick={() => void handleEnrichment("itwewina")}
           >
             {isEnrichmentRunning && activeEnrichment === "itwewina"
               ? "Enriching Itwewina pages..."
               : "Run Itwewina page enrichment"}
+          </button>
+          <button
+            type="button"
+            className="tap-button-secondary"
+            disabled={isRunning || !isEnrichmentRunning || isStoppingEnrichment}
+            onClick={() => void handleStopEnrichment()}
+          >
+            {isStoppingEnrichment ? "Stopping..." : "Stop current enrichment"}
           </button>
         </div>
 
