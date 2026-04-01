@@ -98,19 +98,17 @@ export function PlayWordButton({ lemma, spokenText, audioUrl }: PlayWordButtonPr
   }
 
   return (
-    <div className="space-y-2">
+    <div>
       <button type="button" onClick={handlePlay} disabled={isPlaying} className="tap-button-secondary">
         {isPlaying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Volume2 className="mr-2 h-4 w-4" />}
         {audioUrl ? "Play audio" : "Play with TTS"}
       </button>
 
-      <p className="text-xs text-slate-500">
-        {playbackMode === "tts"
-          ? "Played with browser TTS fallback."
-          : "Uses recorded audio when available, then falls back to browser TTS."}
-      </p>
+      {playbackMode === "tts" ? (
+        <p className="mt-1.5 text-xs text-slate-500">Played with browser TTS fallback.</p>
+      ) : null}
 
-      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+      {error ? <p className="mt-1.5 text-xs text-red-600">{error}</p> : null}
     </div>
   );
 }
