@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Volume2 } from "lucide-react";
 
-type PlaybackMode = "recorded" | "tts" | null;
-
 type PlayWordButtonProps = {
   lemma: string;
   spokenText?: string | null;
@@ -29,7 +27,6 @@ function selectTtsVoice() {
 export function PlayWordButton({ lemma, spokenText, audioUrl }: PlayWordButtonProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -79,16 +76,13 @@ export function PlayWordButton({ lemma, spokenText, audioUrl }: PlayWordButtonPr
         audio.currentTime = 0;
         audio.src = audioUrl;
         await audio.play();
-        setPlaybackMode("recorded");
         return;
       }
 
       await speakWithTts();
-      setPlaybackMode("tts");
     } catch {
       try {
         await speakWithTts();
-        setPlaybackMode("tts");
       } catch (ttsError) {
         setError(ttsError instanceof Error ? ttsError.message : "Unable to play this word.");
       }
@@ -103,12 +97,6 @@ export function PlayWordButton({ lemma, spokenText, audioUrl }: PlayWordButtonPr
         {isPlaying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Volume2 className="mr-2 h-4 w-4" />}
         {audioUrl ? "Play audio" : "Play with TTS"}
       </button>
-
-      <p className="text-xs text-slate-500">
-        {playbackMode === "tts"
-          ? "Played with browser TTS fallback."
-          : "Uses recorded audio when available, then falls back to browser TTS."}
-      </p>
 
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
     </div>
