@@ -246,16 +246,6 @@ export function WordDetailView({ word }: WordDetailViewProps) {
           />
         </div>
 
-        {word.categories.length > 0 ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {word.categories.map((entry) => (
-              <Link key={entry.category.id} href={`/category/${entry.category.slug}`} className="chip">
-                {entry.category.name}
-              </Link>
-            ))}
-          </div>
-        ) : null}
-
         {mode === "expert" && (inflectionalClass || word.rootStem) ? (
           <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50/90 p-4">
             <div className="flex flex-wrap items-center gap-3 text-slate-900">
