@@ -117,3 +117,13 @@ export interface ImportWordPayload extends Omit<WordFormPayload, "categoryIds" |
     }
   >;
 }
+
+export interface ThemeWordBulkEditInput {
+  id: string;
+  lemma: string;
+  syllabics?: string;
+  plainEnglish: string;
+  partOfSpeech: string;
+  keepInTheme: boolean;
+  themeSortOrder: number;
+}

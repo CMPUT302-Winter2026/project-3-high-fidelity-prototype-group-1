@@ -4,8 +4,14 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronLeft, ChevronRight, Sparkles, RotateCcw, Lightbulb, BookOpen, MessageCircle, RefreshCw } from "lucide-react";
 
+type SavedWord = {
+  id: string;
+  syllabics?: string | null;
+};
+
 type FlashcardGeneratorProps = {
   wordIds: string[];
+  savedWords: SavedWord[];
 };
 
 type Flashcard = {
@@ -56,7 +62,7 @@ const cardSwipe = {
 /*  Component                                                         */
 /* ------------------------------------------------------------------ */
 
-export function FlashcardGenerator({ wordIds }: FlashcardGeneratorProps) {
+export function FlashcardGenerator({ wordIds, savedWords }: FlashcardGeneratorProps) {
   const [deck, setDeck] = useState<FlashcardDeckResponse["deck"] | null>(null);
   const [usedFallback, setUsedFallback] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -72,6 +78,11 @@ export function FlashcardGenerator({ wordIds }: FlashcardGeneratorProps) {
 
   const currentCard = deck?.cards[currentIndex] ?? null;
   const total = deck?.cards.length ?? 0;
+
+  // Look up syllabics for the current card from saved words
+  const currentSyllabics = currentCard
+    ? savedWords.find((w) => w.id === currentCard.wordId)?.syllabics
+    : null;
 
   // Measure card content and update container height
   useEffect(() => {
@@ -246,13 +257,18 @@ export function FlashcardGenerator({ wordIds }: FlashcardGeneratorProps) {
                 {/* ---- FRONT face ---- */}
                 <div
                   ref={frontRef}
-                  className="surface-card absolute inset-0 flex flex-col items-center justify-center p-6"
+                  className="absolute inset-0 flex flex-col items-center justify-center rounded-4xl border border-white/70 bg-white p-6 shadow-card"
                   style={{ backfaceVisibility: "hidden" }}
                 >
-                  <p className="section-label mb-5 text-moss-500">Front</p>
                   <p className="whitespace-pre-line text-center font-display text-3xl leading-snug text-slate-900">
                     {currentCard.front}
                   </p>
+
+                  {currentSyllabics ? (
+                    <p className="mt-3 text-center text-lg text-slate-500">
+                      {currentSyllabics}
+                    </p>
+                  ) : null}
 
                   {/* Flip button */}
                   <button
@@ -265,25 +281,21 @@ export function FlashcardGenerator({ wordIds }: FlashcardGeneratorProps) {
                   </button>
 
                   {/* Decorative accents */}
-                  <div className="pointer-events-none absolute right-4 top-4 h-8 w-8 rounded-full bg-moss-50/80" />
-                  <div className="pointer-events-none absolute bottom-4 left-4 h-6 w-6 rounded-full bg-clay-50/80" />
+                  <div className="pointer-events-none absolute right-4 top-4 h-8 w-8 rounded-full bg-moss-50" />
+                  <div className="pointer-events-none absolute bottom-4 left-4 h-6 w-6 rounded-full bg-clay-50" />
                 </div>
 
                 {/* ---- BACK face ---- */}
                 <div
                   ref={backRef}
-                  className="surface-card absolute inset-0 overflow-y-auto p-5"
+                  className="absolute inset-0 overflow-y-auto rounded-4xl border border-white/70 bg-white p-5 shadow-card"
                   style={{
                     backfaceVisibility: "hidden",
                     transform: "rotateY(180deg)",
                   }}
                 >
-                  <p className="section-label mb-4 text-center text-clay-500">
-                    Back
-                  </p>
-
                   {/* Answer */}
-                  <div className="mb-3 rounded-2xl bg-moss-50/60 p-4">
+                  <div className="mb-3 rounded-2xl bg-moss-50 p-4">
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <BookOpen className="h-3.5 w-3.5 shrink-0 text-moss-500" />
                       <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-moss-700">
@@ -296,7 +308,7 @@ export function FlashcardGenerator({ wordIds }: FlashcardGeneratorProps) {
                   </div>
 
                   {/* Hint */}
-                  <div className="mb-3 rounded-2xl bg-clay-50/60 p-4">
+                  <div className="mb-3 rounded-2xl bg-clay-50 p-4">
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <Lightbulb className="h-3.5 w-3.5 shrink-0 text-clay-500" />
                       <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-clay-500">
@@ -309,7 +321,7 @@ export function FlashcardGenerator({ wordIds }: FlashcardGeneratorProps) {
                   </div>
 
                   {/* Practice */}
-                  <div className="mb-4 rounded-2xl bg-lake-50/60 p-4">
+                  <div className="mb-4 rounded-2xl bg-lake-50 p-4">
                     <div className="mb-1.5 flex items-center gap-1.5">
                       <MessageCircle className="h-3.5 w-3.5 shrink-0 text-lake-500" />
                       <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-lake-500">

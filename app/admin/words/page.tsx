@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ThemeWordBulkEditor } from "@/components/admin/theme-word-bulk-editor";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getCategoryOptions, getAdminWords } from "@/lib/queries";
 import { WordDeleteButton } from "@/components/admin/word-delete-button";
@@ -16,6 +17,19 @@ export default async function AdminWordsPage({ searchParams }: AdminWordsPagePro
   const [words, categories] = await Promise.all([getAdminWords(q, category), getCategoryOptions()]);
   const selectedCategory = categories.find((item) => item.id === category) ?? null;
   const hasFilters = q.trim().length > 0 || category.trim().length > 0;
+  const orderedWords = selectedCategory
+    ? [...words].sort((left, right) => {
+        const leftSortOrder = left.categories.find((entry) => entry.categoryId === selectedCategory.id)?.sortOrder ?? 0;
+        const rightSortOrder =
+          right.categories.find((entry) => entry.categoryId === selectedCategory.id)?.sortOrder ?? 0;
+
+        if (leftSortOrder !== rightSortOrder) {
+          return leftSortOrder - rightSortOrder;
+        }
+
+        return left.lemma.localeCompare(right.lemma);
+      })
+    : words;
 
   return (
     <div className="space-y-4">
@@ -49,7 +63,7 @@ export default async function AdminWordsPage({ searchParams }: AdminWordsPagePro
             {selectedCategory ? (
               <p className="mt-3 text-sm leading-6 text-slate-600">
                 Showing only words linked to <span className="font-semibold text-slate-900">{selectedCategory.name}</span>.
-                Use the edit action on any word to clean up theme assignments by hand.
+                Use the bulk editor below to clean up the theme in one pass, or open the full editor for deeper changes.
               </p>
             ) : null}
           </form>
@@ -66,9 +80,27 @@ export default async function AdminWordsPage({ searchParams }: AdminWordsPagePro
         </div>
       </section>
 
-      {words.length > 0 ? (
+      {selectedCategory && orderedWords.length > 0 ? (
+        <ThemeWordBulkEditor
+          category={selectedCategory}
+          initialWords={orderedWords.map((word) => ({
+            id: word.id,
+            slug: word.slug,
+            lemma: word.lemma,
+            syllabics: word.syllabics ?? "",
+            plainEnglish: word.plainEnglish,
+            partOfSpeech: word.partOfSpeech,
+            keepInTheme: true,
+            themeSortOrder: word.categories.find((entry) => entry.categoryId === selectedCategory.id)?.sortOrder ?? 0,
+            categories: word.categories.map((entry) => ({
+              id: entry.category.id,
+              name: entry.category.name
+            }))
+          }))}
+        />
+      ) : orderedWords.length > 0 ? (
         <div className="space-y-3">
-          {words.map((word) => (
+          {orderedWords.map((word) => (
             <div key={word.id} className="surface-card p-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0">

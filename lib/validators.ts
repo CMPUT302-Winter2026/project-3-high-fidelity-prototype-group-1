@@ -81,6 +81,21 @@ export const categorySchema = z.object({
   colorToken: z.string().trim().optional().or(z.literal(""))
 });
 
+export const themeWordBulkEditSchema = z.object({
+  id: z.string().trim().min(1, "Word id is required"),
+  lemma: z.string().trim().min(1, "Cree lemma is required"),
+  syllabics: z.string().trim().optional().or(z.literal("")),
+  plainEnglish: z.string().trim().min(1, "Plain English gloss is required"),
+  partOfSpeech: z.string().trim().min(1, "Part of speech is required"),
+  keepInTheme: z.boolean().default(true),
+  themeSortOrder: z.number().int().nonnegative().default(0)
+});
+
+export const themeWordBulkEditRequestSchema = z.object({
+  categoryId: z.string().trim().min(1, "Category id is required"),
+  words: z.array(themeWordBulkEditSchema).min(1, "Choose at least one word to update")
+});
+
 const importRelationSchema = relationInputSchema.extend({
   toWordId: z.string().trim().optional(),
   targetLemma: z.string().trim().optional(),

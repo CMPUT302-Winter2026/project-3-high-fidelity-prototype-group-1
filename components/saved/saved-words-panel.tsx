@@ -21,7 +21,7 @@ export function SavedWordsPanel() {
 
   return (
     <div className="space-y-3">
-      <FlashcardGenerator wordIds={savedWords.map((word) => word.id)} />
+      <FlashcardGenerator wordIds={savedWords.map((word) => word.id)} savedWords={savedWords} />
       {savedWords.map((word) => (
         <div key={word.id} className="surface-card flex items-center justify-between gap-3 p-4">
           <Link href={`/word/${word.slug}`} className="min-w-0 flex-1">

@@ -3,7 +3,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { emptyToUndefined, normalizeLineBreaks, slugify, uniqueBy } from "@/lib/utils";
 import { wordFormSchema } from "@/lib/validators";
-import type { RelationInput, WordFormPayload } from "@/types";
+import type { RelationInput, ThemeWordBulkEditInput, WordFormPayload } from "@/types";
 
 export function createEmptyWordPayload(): WordFormPayload {
   return {
@@ -140,6 +140,47 @@ async function ensureUniqueSlug(
   }
 }
 
+async function syncPrimaryMeaning(
+  tx: Prisma.TransactionClient,
+  wordId: string,
+  meanings: Array<{
+    id: string;
+    gloss: string;
+    description: string | null;
+    sortOrder: number;
+  }>,
+  plainEnglish: string
+) {
+  const normalizedGloss = plainEnglish.trim().toLowerCase();
+
+  if (meanings.some((meaning) => meaning.gloss.trim().toLowerCase() === normalizedGloss)) {
+    return;
+  }
+
+  const primaryMeaning =
+    meanings.find((meaning) => meaning.description?.trim().toLowerCase() === "primary gloss") ?? meanings[0];
+
+  if (primaryMeaning) {
+    await tx.wordMeaning.update({
+      where: { id: primaryMeaning.id },
+      data: {
+        gloss: plainEnglish.trim(),
+        description: primaryMeaning.description ?? "Primary gloss"
+      }
+    });
+    return;
+  }
+
+  await tx.wordMeaning.create({
+    data: {
+      wordId,
+      gloss: plainEnglish.trim(),
+      description: "Primary gloss",
+      sortOrder: 0
+    }
+  });
+}
+
 function buildWordCoreData(payload: ReturnType<typeof normalizePayload>, slug: string) {
   return {
     lemma: payload.lemma,
@@ -248,6 +289,122 @@ export async function saveWord(payload: WordFormPayload, existingWordId?: string
   const savedWord = await saveWordCore(payload, existingWordId);
   await replaceWordRelations(savedWord.id, payload.relations);
   return savedWord;
+}
+
+export async function bulkUpdateWordsForCategory(categoryId: string, words: ThemeWordBulkEditInput[]) {
+  const sanitizedWords = uniqueBy(words, (word) => word.id);
+
+  return prisma.$transaction(async (tx) => {
+    const [category, existingWords] = await Promise.all([
+      tx.category.findUnique({
+        where: { id: categoryId },
+        select: {
+          slug: true
+        }
+      }),
+      tx.word.findMany({
+        where: {
+          id: {
+            in: sanitizedWords.map((word) => word.id)
+          }
+        },
+        include: {
+          meanings: {
+            orderBy: [{ sortOrder: "asc" }]
+          },
+          categories: {
+            where: {
+              categoryId
+            },
+            select: {
+              categoryId: true,
+              sortOrder: true
+            }
+          }
+        }
+      })
+    ]);
+
+    if (!category) {
+      throw new Error(`Category ${categoryId} was not found.`);
+    }
+
+    const wordsById = new Map(existingWords.map((word) => [word.id, word]));
+    const wordSlugs = new Set<string>();
+
+    for (const entry of sanitizedWords) {
+      const existingWord = wordsById.get(entry.id);
+
+      if (!existingWord) {
+        throw new Error(`Word ${entry.id} was not found.`);
+      }
+
+      const nextLemma = entry.lemma.trim();
+      const nextSyllabics = emptyToUndefined(entry.syllabics);
+      const nextPlainEnglish = entry.plainEnglish.trim();
+      const nextPartOfSpeech = entry.partOfSpeech.trim();
+      const slug =
+        nextLemma === existingWord.lemma ? existingWord.slug : await ensureUniqueSlug(tx, nextLemma, existingWord.id);
+
+      await tx.word.update({
+        where: { id: existingWord.id },
+        data: {
+          lemma: nextLemma,
+          syllabics: nextSyllabics,
+          plainEnglish: nextPlainEnglish,
+          partOfSpeech: nextPartOfSpeech,
+          slug
+        }
+      });
+
+      if (existingWord.plainEnglish.trim() !== nextPlainEnglish) {
+        await syncPrimaryMeaning(tx, existingWord.id, existingWord.meanings, nextPlainEnglish);
+      }
+
+      const categoryLink = existingWord.categories[0] ?? null;
+
+      if (entry.keepInTheme) {
+        if (categoryLink) {
+          await tx.wordCategory.update({
+            where: {
+              wordId_categoryId: {
+                wordId: existingWord.id,
+                categoryId
+              }
+            },
+            data: {
+              sortOrder: entry.themeSortOrder
+            }
+          });
+        } else {
+          await tx.wordCategory.create({
+            data: {
+              wordId: existingWord.id,
+              categoryId,
+              sortOrder: entry.themeSortOrder
+            }
+          });
+        }
+      } else if (categoryLink) {
+        await tx.wordCategory.delete({
+          where: {
+            wordId_categoryId: {
+              wordId: existingWord.id,
+              categoryId
+            }
+          }
+        });
+      }
+
+      wordSlugs.add(existingWord.slug);
+      wordSlugs.add(slug);
+    }
+
+    return {
+      categorySlug: category.slug,
+      wordSlugs: Array.from(wordSlugs)
+    };
+  });
 }
 
 export async function deleteWord(wordId: string) {
