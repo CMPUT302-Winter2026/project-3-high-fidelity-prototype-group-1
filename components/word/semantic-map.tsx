@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { ZoomIn, ZoomOut, Minimize2 } from "lucide-react";
 
 import { useAppState } from "@/components/providers/app-providers";
 import { cn } from "@/lib/utils";
@@ -164,88 +163,6 @@ function AnimatedPath({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Zoom / pan hook                                                   */
-/* ------------------------------------------------------------------ */
-
-function useZoomPan(minScale = 1, maxScale = 3) {
-  const [scale, setScale] = useState(1);
-  const [translate, setTranslate] = useState<Vec>({ x: 0, y: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const pinchRef = useRef({ active: false, startDist: 0, startScale: 1 });
-  const panRef = useRef({ active: false, startX: 0, startY: 0, origTx: 0, origTy: 0 });
-
-  const clamp = useCallback(
-    (tx: number, ty: number, s: number) => {
-      const lim = ((s - 1) / s) * 50;
-      return { x: Math.max(-lim, Math.min(lim, tx)), y: Math.max(-lim, Math.min(lim, ty)) };
-    },
-    []
-  );
-
-  const zoomIn = useCallback(() => {
-    setScale((s) => {
-      const n = Math.min(s + 0.5, maxScale);
-      setTranslate((t) => clamp(t.x, t.y, n));
-      return n;
-    });
-  }, [maxScale, clamp]);
-
-  const zoomOut = useCallback(() => {
-    setScale((s) => {
-      const n = Math.max(s - 0.5, minScale);
-      if (n <= 1) setTranslate({ x: 0, y: 0 });
-      else setTranslate((t) => clamp(t.x, t.y, n));
-      return n;
-    });
-  }, [minScale, clamp]);
-
-  const reset = useCallback(() => {
-    setScale(1);
-    setTranslate({ x: 0, y: 0 });
-  }, []);
-
-  const onTouchStart = useCallback(
-    (e: React.TouchEvent) => {
-      if (e.touches.length === 2) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        pinchRef.current = { active: true, startDist: Math.sqrt(dx * dx + dy * dy), startScale: scale };
-      } else if (e.touches.length === 1 && scale > 1) {
-        panRef.current = { active: true, startX: e.touches[0].clientX, startY: e.touches[0].clientY, origTx: translate.x, origTy: translate.y };
-      }
-    },
-    [scale, translate]
-  );
-
-  const onTouchMove = useCallback(
-    (e: React.TouchEvent) => {
-      if (pinchRef.current.active && e.touches.length === 2) {
-        e.preventDefault();
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        const n = Math.max(minScale, Math.min(maxScale, pinchRef.current.startScale * (Math.sqrt(dx * dx + dy * dy) / (pinchRef.current.startDist || 1))));
-        setScale(n);
-        setTranslate((t) => clamp(t.x, t.y, n));
-      } else if (panRef.current.active && e.touches.length === 1) {
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const pctX = ((e.touches[0].clientX - panRef.current.startX) / rect.width) * 100;
-        const pctY = ((e.touches[0].clientY - panRef.current.startY) / rect.height) * 100;
-        setTranslate(clamp(panRef.current.origTx + pctX, panRef.current.origTy + pctY, scale));
-      }
-    },
-    [minScale, maxScale, scale, clamp]
-  );
-
-  const onTouchEnd = useCallback(() => {
-    pinchRef.current.active = false;
-    panRef.current.active = false;
-  }, []);
-
-  return { scale, translate, containerRef, zoomIn, zoomOut, reset, onTouchStart, onTouchMove, onTouchEnd, isZoomed: scale > 1 };
-}
-
-/* ------------------------------------------------------------------ */
 /*  Main component                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -264,23 +181,12 @@ export function SemanticMap({
   );
 
   const usedTypes = Array.from(new Set(nodes.map((n) => n.relationType)));
-  const zoom = useZoomPan(1, 3);
 
   return (
     <div className={cn(framed ? "surface-card p-4" : "space-y-4")}>
       {/* Map */}
-      <div
-        ref={zoom.containerRef}
-        className="relative aspect-square overflow-hidden rounded-4xl border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50"
-        style={{ touchAction: zoom.isZoomed ? "none" : "auto" }}
-        onTouchStart={zoom.onTouchStart}
-        onTouchMove={zoom.onTouchMove}
-        onTouchEnd={zoom.onTouchEnd}
-      >
-        <div
-          className="absolute inset-0 origin-center transition-transform duration-200 ease-out"
-          style={{ transform: `scale(${zoom.scale}) translate(${zoom.translate.x / zoom.scale}%, ${zoom.translate.y / zoom.scale}%)` }}
-        >
+      <div className="relative aspect-square overflow-hidden rounded-4xl border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50">
+        <div className="absolute inset-0">
           {/* Lines — z-10 keeps them behind node cards */}
           <svg className="absolute inset-0 z-10 h-full w-full" viewBox="0 0 100 100" aria-hidden="true">
             {nodes.map((node, i) => {
@@ -346,29 +252,7 @@ export function SemanticMap({
         </div>
       </div>
 
-      {/* Zoom controls */}
-      <div className="mt-2 space-y-2">
-        <div className="flex items-center justify-center gap-2">
-          <button type="button" onClick={zoom.zoomOut} disabled={!zoom.isZoomed} className="tap-button-secondary h-8 w-8 !rounded-full !p-0 text-slate-500 disabled:opacity-30" aria-label="Zoom out">
-            <ZoomOut className="h-3.5 w-3.5" />
-          </button>
-          <button type="button" onClick={zoom.zoomIn} disabled={zoom.scale >= 3} className="tap-button-secondary h-8 w-8 !rounded-full !p-0 text-slate-500 disabled:opacity-30" aria-label="Zoom in">
-            <ZoomIn className="h-3.5 w-3.5" />
-          </button>
-        </div>
-        {zoom.isZoomed ? (
-          <div className="flex justify-center">
-            <button type="button" onClick={zoom.reset} className="tap-button-secondary h-8 !rounded-full !px-3 !py-0 text-xs text-slate-500" aria-label="Reset zoom">
-              <Minimize2 className="mr-1 h-3 w-3" />
-              Reset
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {!zoom.isZoomed ? (
-        <p className="mt-1 text-center text-[0.65rem] text-slate-400">Pinch to zoom · tap a word to explore</p>
-      ) : null}
+      <p className="mt-3 text-center text-[0.65rem] text-slate-400">Tap a word to explore</p>
 
       {/* Legend */}
       {usedTypes.length > 0 ? (
