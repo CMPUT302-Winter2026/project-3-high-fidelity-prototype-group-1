@@ -1,5 +1,8 @@
 # Vocabulary Explorer
 
+# Live Demo
+https://cmput302p3.logan.zone/
+
 ## Team Members(Name & CCID): 
 * **Logan Omelchuk** (omelchuk)
 * **Min Kim** (mkkim1)
